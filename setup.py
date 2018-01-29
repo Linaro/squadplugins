@@ -1,7 +1,7 @@
 from setuptools import setup
 
 setup(
-    name='squadplugins',
+    name='squad-linaro-plugins',
     version='1.0',
     author='Milosz Wasilewski',
     author_email='milosz.wasilewski@linaro.org',
@@ -14,9 +14,9 @@ setup(
         ]
     },
     license='AGPLv3+',
-    description="SQUAD plugini collection",
+    description="SQUAD plugins collection",
     long_description="""
-    SQUAD pluginis that are compatible with Linaro's test-definitionis.
+    SQUAD plugins that are compatible with Linaro's test-definitions.
     The package contains plugin for parsing CTS/VTS results (tradefed)
     and LTP results (ltp).
     """,
