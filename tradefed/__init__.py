@@ -18,8 +18,15 @@ class Tradefed(BasePlugin):
         tradefed_tree = ET.parse(buf)
         for test in test_list:
             # search in etree for relevant test
-            test_name = test.name.rsplit(".", 1)[1]
+            test_name_list = test.name.rsplit(".")
+            test_name = test_name_list[-1]
+            logger.debug("searching for %s log" % test_name)
             log_node = tradefed_tree.find('.//Test[@name="%s"]' % test_name)
+            if log_node is None:
+                test_name = test_name_list[-2] + "." + test_name
+                logger.debug("searching for %s log" % test_name)
+                log_node = tradefed_tree.find('.//Test[@name="%s"]' % test_name)
+
             if log_node is not None:
                 trace_node = log_node.find('.//StackTrace')
                 test.log = trace_node.text
