@@ -14,14 +14,28 @@ class Tradefed(BasePlugin):
     name = "Tradefed"
 
     def __assign_test_log(self, buf, test_list):
+        if buf is None:
+            logger.warning("Results file doesn't exist")
+            return
         # assume buf is a file-like object
         tradefed_tree = ET.parse(buf)
         for test in test_list:
             # search in etree for relevant test
+            logger.debug("processing %s/%s" % (test.suite, test.name))
+            test_suite_name_list = str(test.suite).split("/")
+            test_suite_name = test_suite_name_list[-1]
+            test_suite_abi = None
+            if "." in test_suite_name:
+                test_suite_abi, test_suite_name = test_suite_name.split(".")
             test_name_list = test.name.rsplit(".")
             test_name = test_name_list[-1]
             logger.debug("searching for %s log" % test_name)
-            log_node = tradefed_tree.find('.//Test[@name="%s"]' % test_name)
+            if test_suite_abi is not None:
+                # Module name="VtsKernelLtp" abi="armeabi-v7a"
+                suite_node = tradefed_tree.find('.//Module[@name="%s"][@abi="%s"]' % (test_suite_name, test_suite_abi))
+            else:
+                suite_node = tradefed_tree.find('.//Module[@name="%s"]' % (test_suite_name))
+            log_node = suite_node.find('.//Test[@name="%s"]' % test_name)
             if log_node is None:
                 test_name = test_name_list[-2] + "." + test_name
                 logger.debug("searching for %s log" % test_name)
@@ -29,8 +43,9 @@ class Tradefed(BasePlugin):
 
             if log_node is not None:
                 trace_node = log_node.find('.//StackTrace')
-                test.log = trace_node.text
-                test.save()
+                if trace_node is not None:
+                    test.log = trace_node.text
+                    test.save()
 
 
     def __download_results(self, result_dict):
