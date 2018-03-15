@@ -102,29 +102,30 @@ class Tradefed(BasePlugin):
                     else:
                         break
 
-    def postprocess_testrun(self, testrun):
+    def postprocess_testjob(self, testjob):
         # get related testjob
-        logger.debug("Starting CTS/VTS plugin for test run: %s" % testrun.pk)
-        for testjob in testrun.test_jobs.all():
-            logging.debug("Processing test job: %s" % testjob.job_id)
-            if not testjob.backend.implementation_type == 'lava':
-                logger.warning("Test job %s doesn't come from LAVA" % testjob.job_id)
-                logger.debug(testjob.backend.implementation_type)
-                continue # this plugin only applies to LAVA
-            # check if testjob is a tradefed job
-            if testjob.definition:
-                logger.debug("Loading test job definition")
-                job_definition = yaml.load(testjob.definition)
-                # find all tests
-                if 'actions' in job_definition.keys():
-                    for test_action in [action for action in job_definition['actions'] if'test' in action.keys()]:
-                        for test_definition in test_action['test']['definitions']:
-                            logger.debug("Processing test %s" % test_definition['name'])
-                            if "tradefed.yaml" in test_definition['path']:  # is there any better heuristic?
-                                # download and parse results
-                                buf = self.__get_from_artifactorial(testjob, test_definition['name'])
-                                # only failed tests have logs
-                                failed = testrun.tests.filter(result=False)
+        logger.info("Starting CTS/VTS plugin for test job: %s" % testjob.pk)
+        logging.debug("Processing test job: %s" % testjob.job_id)
+        if not testjob.backend.implementation_type == 'lava':
+            logger.warning("Test job %s doesn't come from LAVA" % testjob.job_id)
+            logger.debug(testjob.backend.implementation_type)
+            return # this plugin only applies to LAVA
+        # check if testjob is a tradefed job
+        if testjob.definition:
+            logger.debug("Loading test job definition")
+            job_definition = yaml.load(testjob.definition)
+            # find all tests
+            if 'actions' in job_definition.keys():
+                for test_action in [action for action in job_definition['actions'] if'test' in action.keys()]:
+                    for test_definition in test_action['test']['definitions']:
+                        logger.debug("Processing test %s" % test_definition['name'])
+                        if "tradefed.yaml" in test_definition['path']:  # is there any better heuristic?
+                            # download and parse results
+                            buf = self.__get_from_artifactorial(testjob, test_definition['name'])
+                            # only failed tests have logs
+                            if testjob.testrun is not None:
+                                failed = testjob.testrun.tests.filter(result=False)
                                 self.__assign_test_log(buf, failed)
+        logger.info("Finishing CTS/VTS plugin for test run: %s" % testjob.pk)
 
 
