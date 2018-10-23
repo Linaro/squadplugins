@@ -30,11 +30,15 @@ class Tradefed(BasePlugin):
             test_name_list = test.name.rsplit(".")
             test_name = test_name_list[-1]
             logger.debug("searching for %s log" % test_name)
+            suite_node = None
             if test_suite_abi is not None:
                 # Module name="VtsKernelLtp" abi="armeabi-v7a"
                 suite_node = tradefed_tree.find('.//Module[@name="%s"][@abi="%s"]' % (test_suite_name, test_suite_abi))
             else:
                 suite_node = tradefed_tree.find('.//Module[@name="%s"]' % (test_suite_name))
+            if not suite_node:
+                logger.debug("Module %s is not present in the log" % test_suite_name)
+                continue
             log_node = suite_node.find('.//Test[@name="%s"]' % test_name)
             if log_node is None:
                 test_name = test_name_list[-2] + "." + test_name
