@@ -5,13 +5,26 @@ import yaml
 import xml.etree.ElementTree as ET
 from io import BytesIO
 from squad.plugins import Plugin as BasePlugin
+from squad.core.models import Attachment
 
 
 logger = logging.getLogger()
 
 
+class ExtractedResult(object):
+    contents = None
+    length = None
+
+
+class ResultFiles(object):
+    test_results = None
+    tradefed_logcat = None
+    tradefed_stdout = None
+
+
 class Tradefed(BasePlugin):
     name = "Tradefed"
+    tradefed_results_url = None
 
     def __assign_test_log(self, buf, test_list):
         if buf is None:
@@ -19,6 +32,7 @@ class Tradefed(BasePlugin):
             return
         # assume buf is a file-like object
         tradefed_tree = ET.parse(buf)
+        buf.seek(0)
         for test in test_list:
             # search in etree for relevant test
             logger.debug("processing %s/%s" % (test.suite, test.name))
@@ -52,12 +66,20 @@ class Tradefed(BasePlugin):
                     test.save()
 
 
+    def __extract_member(self, tar_file, tar_member):
+        extracted_container = ExtractedResult()
+        extracted_container.contents = tar_file.extractfile(tar_member)
+        extracted_container.length = tar_member.size
+        return extracted_container
+
     def __download_results(self, result_dict):
+        results = ResultFiles()
         if 'metadata' in result_dict:
             if 'reference' in result_dict['metadata']:
                 try:
                     logger.debug("Downloading CTS/VTS log from: %s" % result_dict['metadata']['reference'])
-                    result_tarball_request = requests.get(result_dict['metadata']['reference'])
+                    self.tradefed_results_url = result_dict['metadata']['reference']
+                    result_tarball_request = requests.get(self.tradefed_results_url)
                     if result_tarball_request.status_code == 200:
                         result_tarball_request.raw.decode_content = True
                         r = BytesIO(result_tarball_request.content)
@@ -66,14 +88,19 @@ class Tradefed(BasePlugin):
                         for member in t.getmembers():
                             logger.debug("Available member: %s" % member.name)
                             if "test_result.xml" in member.name:
-                                buf = t.extractfile(member)
-                                logger.debug("buf object is empty: %s" % (buf is None))
-                                return buf
+                                results.test_results = self.__extract_member(t, member)
+                                logger.debug("test_results object is empty: %s" % (results.test_results is None))
+                            if "tradefed-stdout.txt" in member.name:
+                                results.tradefed_stdout = self.__extract_member(t, member)
+                                logger.debug("tradefed_stdout object is empty: %s" % (results.tradefed_stdout is None))
+                            if "tradefed-logcat.txt" in member.name:
+                                results.tradefed_logcat = self.__extract_member(t, member)
+                                logger.debug("tradefed_logcat object is empty: %s" % (results.tradefed_logcat is None))
                 except tarfile.ReadError:
-                    return None
+                    pass
                 except requests.exceptions.Timeout:
-                    return None
-        return None
+                    pass
+        return results
 
     def __get_from_artifactorial(self, testjob, suite_name):
         logger.debug("Retrieving result summary for job: %s" % testjob.job_id)
@@ -106,6 +133,14 @@ class Tradefed(BasePlugin):
                     else:
                         break
 
+    def __create_testrun_attachment(self, testrun, name, extracted_file):
+        tr_attachment = Attachment.objects.create(
+            test_run = testrun,
+            filename = name,
+            data = extracted_file.contents.read(),
+            length = extracted_file.length
+        )
+
     def postprocess_testjob(self, testjob):
         # get related testjob
         logger.info("Starting CTS/VTS plugin for test job: %s" % testjob.pk)
@@ -125,11 +160,20 @@ class Tradefed(BasePlugin):
                         logger.debug("Processing test %s" % test_definition['name'])
                         if "tradefed.yaml" in test_definition['path']:  # is there any better heuristic?
                             # download and parse results
-                            buf = self.__get_from_artifactorial(testjob, test_definition['name'])
+                            results = self.__get_from_artifactorial(testjob, test_definition['name'])
+                            # add metadata key for taball download
+                            testjob.testrun.metadata["tradefed_results_url_%s" % testjob.job_id] = self.tradefed_results_url
+                            testjob.testrun.save()
                             # only failed tests have logs
                             if testjob.testrun is not None:
                                 failed = testjob.testrun.tests.filter(result=False)
-                                self.__assign_test_log(buf, failed)
+                                self.__assign_test_log(results.test_results.contents, failed)
+                                if results.test_results is not None:
+                                    self.__create_testrun_attachment(testjob.testrun, "test_results.xml", results.test_results)
+                                if results.tradefed_stdout is not None:
+                                    self.__create_testrun_attachment(testjob.testrun, "teadefed_stdout.txt", results.tradefed_stdout)
+                                if results.tradefed_logcat is not None:
+                                    self.__create_testrun_attachment(testjob.testrun, "teadefed_logcat.txt", results.tradefed_logcat)
         logger.info("Finishing CTS/VTS plugin for test run: %s" % testjob.pk)
 
 
