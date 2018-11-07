@@ -95,16 +95,26 @@ class Tradefed(BasePlugin):
                             if "tradefed-logcat.txt" in member.name:
                                 results.tradefed_logcat = self._extract_member(t, member)
                                 logger.debug("tradefed_logcat object is empty: %s" % (results.tradefed_logcat is None))
-                except tarfile.ReadError:
-                    pass
+                except tarfile.ReadError as e:
+                    logger.warn(e)
+                    logger.warn("tarfile.ReadError")
                 except requests.exceptions.Timeout:
-                    pass
+                    logger.warn("requests.exceptions.Timeout")
         return results
 
     def _get_from_artifactorial(self, testjob, suite_name):
         logger.debug("Retrieving result summary for job: %s" % testjob.job_id)
         suites = testjob.backend.get_implementation().proxy.results.get_testjob_suites_list_yaml(testjob.job_id)
-        y = yaml.load(suites)
+        y = None
+        try:
+            y = yaml.load(suites)
+        except yaml.parser.ParserError:
+            return None
+
+        if not y:
+            logger.debug("Something went wrong when calling results.get_testjob_suites_list_yaml from LAVA")
+            return None
+
         for suite in y:
             if suite_name in suite['name']:
                 limit = 500
@@ -114,7 +124,16 @@ class Tradefed(BasePlugin):
                     suite['name'],
                     limit,
                     offset)
-                yaml_results = yaml.load(results, Loader=yaml.CLoader)
+                yaml_results = None
+                try:
+                    yaml_results = yaml.load(results, Loader=yaml.CLoader)
+                except yaml.scanner.ScannerError:
+                    return None
+
+                if not yaml_results:
+                    logger.debug("Something went wrong with results.get_testsuite_results_yaml from LAVA")
+                    return None
+
                 while True:
                     if len(yaml_results) > 0:
                         for result in yaml_results:
@@ -131,6 +150,7 @@ class Tradefed(BasePlugin):
                         yaml_results = yaml.load(results, Loader=yaml.CLoader)
                     else:
                         break
+        return None
 
     def _create_testrun_attachment(self, testrun, name, extracted_file):
         testrun.attachments.create(
@@ -159,19 +179,20 @@ class Tradefed(BasePlugin):
                         if "tradefed.yaml" in test_definition['path']:  # is there any better heuristic?
                             # download and parse results
                             results = self._get_from_artifactorial(testjob, test_definition['name'])
-                            # add metadata key for taball download
-                            testjob.testrun.metadata["tradefed_results_url_%s" % testjob.job_id] = self.tradefed_results_url
-                            testjob.testrun.save()
-                            # only failed tests have logs
-                            if testjob.testrun is not None:
-                                failed = testjob.testrun.tests.filter(result=False)
-                                self._assign_test_log(results.test_results.contents, failed)
-                                if results.test_results is not None:
-                                    self._create_testrun_attachment(testjob.testrun, "test_results.xml", results.test_results)
-                                if results.tradefed_stdout is not None:
-                                    self._create_testrun_attachment(testjob.testrun, "teadefed_stdout.txt", results.tradefed_stdout)
-                                if results.tradefed_logcat is not None:
-                                    self._create_testrun_attachment(testjob.testrun, "teadefed_logcat.txt", results.tradefed_logcat)
+                            if results is not None:
+                                # add metadata key for taball download
+                                testjob.testrun.metadata["tradefed_results_url_%s" % testjob.job_id] = self.tradefed_results_url
+                                testjob.testrun.save()
+                                # only failed tests have logs
+                                if testjob.testrun is not None:
+                                    failed = testjob.testrun.tests.filter(result=False)
+                                    self._assign_test_log(results.test_results.contents, failed)
+                                    if results.test_results is not None:
+                                        self._create_testrun_attachment(testjob.testrun, "test_results.xml", results.test_results)
+                                    if results.tradefed_stdout is not None:
+                                        self._create_testrun_attachment(testjob.testrun, "teadefed_stdout.txt", results.tradefed_stdout)
+                                    if results.tradefed_logcat is not None:
+                                        self._create_testrun_attachment(testjob.testrun, "teadefed_logcat.txt", results.tradefed_logcat)
         logger.info("Finishing CTS/VTS plugin for test run: %s" % testjob.pk)
 
 
