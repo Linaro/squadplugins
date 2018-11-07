@@ -5,7 +5,6 @@ import yaml
 import xml.etree.ElementTree as ET
 from io import BytesIO
 from squad.plugins import Plugin as BasePlugin
-from squad.core.models import Attachment
 
 
 logger = logging.getLogger()
@@ -134,8 +133,7 @@ class Tradefed(BasePlugin):
                         break
 
     def __create_testrun_attachment(self, testrun, name, extracted_file):
-        tr_attachment = Attachment.objects.create(
-            test_run = testrun,
+        testrun.attachments.create(
             filename = name,
             data = extracted_file.contents.read(),
             length = extracted_file.length
