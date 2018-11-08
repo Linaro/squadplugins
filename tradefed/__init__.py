@@ -194,7 +194,8 @@ class Tradefed(BasePlugin):
                                 # only failed tests have logs
                                 if testjob.testrun is not None:
                                     failed = testjob.testrun.tests.filter(result=False)
-                                    self._assign_test_log(results.test_results.contents, failed)
+                                    if results.test_results is not None:
+                                        self._assign_test_log(results.test_results.contents, failed)
                                     if results.test_results is not None:
                                         self._create_testrun_attachment(testjob.testrun, "test_results.xml", results.test_results)
                                     if results.tradefed_stdout is not None:
