@@ -34,8 +34,7 @@ class Tradefed(BasePlugin):
         try:
             tradefed_tree = ET.parse(buf)
         except ET.ParseError as e:
-            logger.warn(e)
-            logger.warn("XML parsing failed")
+            logger.warning(e)
             return
         if tradefed_tree is None:
             return
@@ -104,10 +103,9 @@ class Tradefed(BasePlugin):
                                 results.tradefed_logcat = self._extract_member(t, member)
                                 logger.debug("tradefed_logcat object is empty: %s" % (results.tradefed_logcat is None))
                 except tarfile.ReadError as e:
-                    logger.warn(e)
-                    logger.warn("tarfile.ReadError")
-                except requests.exceptions.Timeout:
-                    logger.warn("requests.exceptions.Timeout")
+                    logger.warning(e)
+                except requests.exceptions.Timeout as e:
+                    logger.warning(e)
         return results
 
     def _get_from_artifactorial(self, testjob, suite_name):
@@ -116,7 +114,8 @@ class Tradefed(BasePlugin):
         y = None
         try:
             y = yaml.load(suites)
-        except yaml.parser.ParserError:
+        except yaml.parser.ParserError as e:
+            logger.warning(e)
             return None
 
         if not y:
@@ -135,7 +134,8 @@ class Tradefed(BasePlugin):
                 yaml_results = None
                 try:
                     yaml_results = yaml.load(results, Loader=yaml.CLoader)
-                except yaml.scanner.ScannerError:
+                except yaml.scanner.ScannerError as e:
+                    logger.warning(e)
                     return None
 
                 if not yaml_results:
