@@ -30,7 +30,15 @@ class Tradefed(BasePlugin):
             logger.warning("Results file doesn't exist")
             return
         # assume buf is a file-like object
-        tradefed_tree = ET.parse(buf)
+        tradefed_tree = None
+        try:
+            tradefed_tree = ET.parse(buf)
+        except ET.ParseError as e:
+            logger.warn(e)
+            logger.warn("XML parsing failed")
+            return
+        if tradefed_tree is None:
+            return
         buf.seek(0)
         for test in test_list:
             # search in etree for relevant test
