@@ -1,3 +1,6 @@
+.. image:: https://travis-ci.org/Linaro/squadplugins.svg?branch=master
+    :target: https://travis-ci.org/Linaro/squadplugins
+
 SQUAD Plugins
 =============
 
