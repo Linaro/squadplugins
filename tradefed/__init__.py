@@ -1,6 +1,7 @@
 import logging
 import requests
 import tarfile
+import xmlrpc
 import yaml
 import xml.etree.ElementTree as ET
 from io import BytesIO
@@ -186,7 +187,13 @@ class Tradefed(BasePlugin):
                         logger.debug("Processing test %s" % test_definition['name'])
                         if "tradefed.yaml" in test_definition['path']:  # is there any better heuristic?
                             # download and parse results
-                            results = self._get_from_artifactorial(testjob, test_definition['name'])
+                            results = None
+                            try:
+                                results = self._get_from_artifactorial(testjob, test_definition['name'])
+                            except xmlrpc.client.ProtocolError as err:
+                                logger.error(err.errcode)
+                                logger.error(err.errmsg)
+
                             if results is not None:
                                 # add metadata key for taball download
                                 testjob.testrun.metadata["tradefed_results_url_%s" % testjob.job_id] = self.tradefed_results_url
