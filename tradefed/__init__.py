@@ -183,6 +183,8 @@ class Tradefed(BasePlugin):
             # find all tests
             if 'actions' in job_definition.keys():
                 for test_action in [action for action in job_definition['actions'] if'test' in action.keys()]:
+                    if 'definitions' not in test_action['test'].keys():
+                        continue
                     for test_definition in test_action['test']['definitions']:
                         logger.debug("Processing test %s" % test_definition['name'])
                         if "tradefed.yaml" in test_definition['path']:  # is there any better heuristic?
