@@ -233,6 +233,168 @@ actions:
       name: cts-lkft-armeabi-v7a
 """
 
+JOB_DEFINITION_INTERACTIVE = """
+device_type: hi6220-hikey-r2
+job_name: lkft-android-android-hikey-linaro-4.4-efd576b19eac-51-cts-armeabi-v7a
+timeouts:
+  job:
+    minutes: 360
+  action:
+    minutes: 15
+  connection:
+    minutes: 2
+priority: medium
+visibility:
+  group:
+  - lkft
+
+secrets:
+  ARTIFACTORIAL_TOKEN: 3a861de8371936ecd03c0a342b3cb9b4
+  AP_SSID: LAVATEST
+  AP_KEY: NepjqGbq
+
+metadata:
+  android.url: http://testdata.linaro.org/lkft/aosp-stable/android-8.1.0_r29/
+  android.version: Android 8.1
+  build-location: http://snapshots.linaro.org/android/lkft/android-8.1-tracking/51
+  git branch: android-hikey-linaro-4.4-efd576b19eac
+  git repo: hikey-linaro
+  git commit: '51'
+  git describe: efd576b19eac
+  build-url: https://ci.linaro.org/job/lkft-android-8.1-tracking/51/
+  cts-manifest: http://testdata.linaro.org/cts/android-cts-8.1_r6//pinned-manifest.xml
+  cts-version: android-cts-8.1_r6
+  cts-plan: cts-lkft
+  toolchain: clang
+  series: lkft
+
+protocols:
+  lava-lxc:
+    name: lxc-hikey-test
+    distribution: ubuntu
+    release: xenial
+    arch: amd64
+    verbose: true
+
+actions:
+- deploy:
+    namespace: tlxc
+    timeout:
+      minutes: 5
+    to: lxc
+    packages:
+    - systemd
+    - systemd-sysv
+    - ca-certificates
+    - wget
+    - unzip
+    os: debian
+
+- boot:
+    namespace: tlxc
+    prompts:
+    - root@(.*):/#
+    - :/
+    timeout:
+      minutes: 5
+    method: lxc
+
+- test:
+    namespace: tlxc
+    timeout:
+      minutes: 10
+    definitions:
+    - from: inline
+      name: install-google-fastboot
+      path: inline/install-google-fastboot.yaml
+      repository:
+        metadata:
+          format: Lava-Test Test Definition 1.0
+          name: install-fastboot
+          description: Install fastboot provided by google
+        run:
+          steps:
+          - wget https://dl.google.com/android/repository/platform-tools_r26.0.0-linux.zip
+          - unzip platform-tools_r26.0.0-linux.zip
+          - ln -s `pwd`/platform-tools/fastboot /usr/bin/fastboot
+          - ln -s `pwd`/platform-tools/adb /usr/bin/adb
+          - fastboot --version
+
+- deploy:
+    timeout:
+      minutes: 30
+    to: fastboot
+    namespace: droid
+    connection: lxc
+
+- boot:
+    namespace: droid
+    connection: serial
+    prompts:
+    - root@(.*):/#
+    - :/
+    timeout:
+      minutes: 15
+    method: fastboot
+
+- test:
+    namespace: droid
+    timeout:
+      minutes: 10
+    interactive:
+    - name: write-presistdata
+      prompts: ["=>", "/ # "]
+      script:
+      - command: "mmc list"
+        name: mmc_list
+      - command: "mmc dev 0"
+        name: mmc_dev_0
+      - command: "mmc part"
+        name: mmc_part
+      - command: "mw.b ****"
+        name: mw_b
+      - command: "mmc write ****"
+        name: mmc_write
+      - command: "fastboot 0"
+        name: fastboot_
+
+- test:
+    namespace: tlxc
+    connection: lxc
+    timeout:
+      minutes: 300
+    definitions:
+    - from: inline
+      path: android-boot.yaml
+      name: android-boot
+      repository:
+        metadata:
+          format: Lava-Test Test Definition 1.0
+          name: android-boot
+          description: android-boot
+        run:
+          steps:
+          - lava-test-case "android-boot" --shell adb getprop sys.boot_completed
+
+- test:
+    namespace: tlxc
+    connection: lxc
+    timeout:
+      minutes: 300
+    definitions:
+    - repository: https://git.linaro.org/qa/test-definitions.git
+      from: git
+      path: automated/android/noninteractive-tradefed/tradefed.yaml
+      params:
+        TEST_PARAMS: cts-lkft -a armeabi-v7a --disable-reboot --skip-preconditions
+          --skip-device-info --exclude-filter CtsDisplayTestCases
+        TEST_URL: http://testdata.linaro.org/cts/android-cts-8.1_r6//android-cts.zip
+        TEST_PATH: android-cts
+        RESULTS_FORMAT: atomic
+        ANDROID_VERSION: Android 8.1
+      name: cts-lkft-armeabi-v7a
+"""
+
 logger = logging.getLogger()
 logger.setLevel(logging.ERROR)
 
@@ -268,6 +430,38 @@ class TradefedLogsPluginTest(unittest.TestCase):
         implementation_type_mock = PropertyMock(return_value="lava")
         type(testjob_mock.backend).implementation_type = implementation_type_mock
         definition_mock = PropertyMock(return_value=JOB_DEFINITION)
+        type(testjob_mock).definition = definition_mock
+        self.plugin.postprocess_testjob(testjob_mock)
+        implementation_type_mock.assert_called_once()
+        definition_mock.assert_called()
+        results_url_mock.assert_called()
+        testjob_mock.testrun.metadata.__setitem__.assert_called()
+        testjob_mock.testrun.save.assert_called()
+        assign_test_log_mock.assert_not_called()
+        create_testrun_attachment_mock.assert_not_called()
+
+    @patch("tradefed.Tradefed._create_testrun_attachment")
+    @patch("tradefed.Tradefed._assign_test_log")
+    @patch("tradefed.Tradefed._get_from_artifactorial")
+    @patch("tradefed.Tradefed.tradefed_results_url", new_callable=PropertyMock)
+    def test_postprocess_testjob_interactive(
+        self,
+        results_url_mock,
+        get_from_artifactorial_mock,
+        assign_test_log_mock,
+        create_testrun_attachment_mock,
+    ):
+        results_url_mock.return_value = "http://foo.com"
+        get_from_artifactorial_mock.return_value = ResultFiles()
+        testjob_mock = MagicMock()
+        id_mock = PropertyMock(return_value="999111")
+        type(testjob_mock).pk = id_mock
+        job_id_mock = PropertyMock(return_value="1234")
+        type(testjob_mock).job_id = job_id_mock
+        testjob_mock.backend = MagicMock()
+        implementation_type_mock = PropertyMock(return_value="lava")
+        type(testjob_mock.backend).implementation_type = implementation_type_mock
+        definition_mock = PropertyMock(return_value=JOB_DEFINITION_INTERACTIVE)
         type(testjob_mock).definition = definition_mock
         self.plugin.postprocess_testjob(testjob_mock)
         implementation_type_mock.assert_called_once()
