@@ -26,6 +26,16 @@ class Tradefed(BasePlugin):
     name = "Tradefed"
     tradefed_results_url = None
 
+    def __iterate_test_names(self, tradefed_tree, test_suite_name_list, test_name_list, join_char):
+        prefix_string = "/".join(test_suite_name_list[2:])
+        prefixes = prefix_string.split(".")
+        for index in range(0, len(prefixes)):
+            test_name = ".".join(prefixes[index:]) + join_char + ".".join(test_name_list)
+            logger.debug("searching for test: %s" % test_name)
+            log_node = tradefed_tree.find('.//Test[@name="%s"]' % test_name)
+            if log_node is not None:
+                return log_node
+
     def _assign_test_log(self, buf, test_list):
         if buf is None:
             logger.warning("Results file doesn't exist")
@@ -44,7 +54,7 @@ class Tradefed(BasePlugin):
             # search in etree for relevant test
             logger.debug("processing %s/%s" % (test.suite, test.name))
             test_suite_name_list = str(test.suite).split("/")
-            test_suite_name = test_suite_name_list[-1]
+            test_suite_name = test_suite_name_list[1]
             test_suite_abi = None
             if "." in test_suite_name:
                 test_suite_abi, test_suite_name = test_suite_name.split(".")
@@ -62,16 +72,19 @@ class Tradefed(BasePlugin):
                 continue
             log_node = suite_node.find('.//Test[@name="%s"]' % test_name)
             if log_node is None:
-                test_name = test_name_list[-2] + "." + test_name
-                logger.debug("searching for %s log" % test_name)
+                test_name = ".".join(test_name_list[1:])
+                logger.debug("searching for test: %s" % test_name)
                 log_node = tradefed_tree.find('.//Test[@name="%s"]' % test_name)
+            if log_node is None:
+                log_node = self.__iterate_test_names(tradefed_tree, test_suite_name_list, test_name_list, ".")
+            if log_node is None:
+                log_node = self.__iterate_test_names(tradefed_tree, test_suite_name_list, test_name_list, "/")
 
             if log_node is not None:
                 trace_node = log_node.find('.//StackTrace')
                 if trace_node is not None:
                     test.log = trace_node.text
                     test.save()
-
 
     def _extract_member(self, tar_file, tar_member):
         extracted_container = ExtractedResult()

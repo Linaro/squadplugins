@@ -74,13 +74,20 @@ RESULT_DICT = {
 XML_RESULTS = """<?xml version='1.0' encoding='UTF-8' standalone='no' ?>
 <Result start="1517218412388" end="1517221873527" start_display="Mon Jan 29 09:33:32 UTC 2018" end_display="Mon Jan 29 10:31:13 UTC 2018" suite_name="CTS" suite_version="8.1_r1" suite_plan="cts-lkft" suite_build_number="687" report_version="5.0" command_line_args="cts-lkft -a arm64-v8a --disable-reboot --skip-preconditions --skip-device-info" devices="96B0201601000622" host_name="lxc-hikey-test-104120" os_name="Linux" os_version="4.9.0-5-amd64" os_arch="amd64" java_vendor="Oracle Corporation" java_version="9-internal">
   <Build build_abis_64="arm64-v8a" build_manufacturer="unknown" build_abis_32="armeabi-v7a,armeabi" build_product="hikey" build_brand="Android" build_board="hikey" build_serial="96B0201601000622" build_version_security_patch="2017-12-01" build_reference_fingerprint="" build_fingerprint="Android/hikey/hikey:P/OC-MR1/687:userdebug/test-keys" build_version_sdk="27" build_abis="arm64-v8a,armeabi-v7a,armeabi" build_device="hikey" build_abi="arm64-v8a" build_model="hikey" build_id="OC-MR1" build_abi2="" build_version_incremental="687" build_version_release="P" build_version_base_os="" build_type="userdebug" build_tags="test-keys" />
-  <Summary pass="3" failed="1" modules_done="1" modules_total="1" />
+  <Summary pass="3" failed="2" modules_done="1" modules_total="1" />
   <Module name="module_foo" abi="arm64-v8a" runtime="34082" done="true" pass="1">
     <TestCase name="TestCaseBar">
       <Test result="pass" name="test_bar1" />
       <Test result="pass" name="test_bar2" />
       <Test result="pass" name="test_bar3" />
-      <Test result="pass" name="test_bar4" >
+      <Test result="fail" name="test_bar4" >
+        <Failure message="java.lang.Error">
+          <StackTrace>java.lang.Error:
+at org.junit.Assert.fail(Assert.java:88)
+</StackTrace>
+        </Failure>
+      </Test>
+      <Test result="fail" name="first_subname/second_subname.third_subname/test_bar5_64bit">
         <Failure message="java.lang.Error">
           <StackTrace>java.lang.Error:
 at org.junit.Assert.fail(Assert.java:88)
@@ -664,6 +671,16 @@ class TradefedLogsPluginTest(unittest.TestCase):
         suite_mock = PropertyMock(return_value="cts-lkft/arm64-v8a.module_foo")
         type(test_mock).suite = suite_mock
         name_mock = PropertyMock(return_value="TestCaseBar.test_bar4")
+        type(test_mock).name = name_mock
+        self.plugin._assign_test_log(StringIO(XML_RESULTS), [test_mock])
+        self.assertIn("java.lang.Error", test_mock.log)
+        test_mock.save.assert_called_once()
+
+    def test_assign_test_log_complex_name(self):
+        test_mock = Mock()
+        suite_mock = PropertyMock(return_value="cts-lkft/arm64-v8a.module_foo/TestCaseBar.first_subname/second_subname.third_subname")
+        type(test_mock).suite = suite_mock
+        name_mock = PropertyMock(return_value="test_bar5_64bit")
         type(test_mock).name = name_mock
         self.plugin._assign_test_log(StringIO(XML_RESULTS), [test_mock])
         self.assertIn("java.lang.Error", test_mock.log)
