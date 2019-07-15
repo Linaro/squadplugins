@@ -676,6 +676,15 @@ class TradefedLogsPluginTest(unittest.TestCase):
         self.assertIn("java.lang.Error", test_mock.log)
         test_mock.save.assert_called_once()
 
+    def test_assign_test_log_no_slash(self):
+        test_mock = Mock()
+        suite_mock = PropertyMock(return_value="cts-lkft.arm64-v8a.module_foo")
+        type(test_mock).suite = suite_mock
+        name_mock = PropertyMock(return_value="TestCaseBar.test_bar4")
+        type(test_mock).name = name_mock
+        self.plugin._assign_test_log(StringIO(XML_RESULTS), [test_mock])
+        test_mock.save.assert_not_called()
+
     def test_assign_test_log_complex_name(self):
         test_mock = Mock()
         suite_mock = PropertyMock(return_value="cts-lkft/arm64-v8a.module_foo/TestCaseBar.first_subname/second_subname.third_subname")
