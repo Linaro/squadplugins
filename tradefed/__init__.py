@@ -54,6 +54,10 @@ class Tradefed(BasePlugin):
             # search in etree for relevant test
             logger.debug("processing %s/%s" % (test.suite, test.name))
             test_suite_name_list = str(test.suite).split("/")
+            if len(test_suite_name_list) <= 1:
+                # assume that test results produced by LAVA
+                # and test-definitions always contain at least one "/"
+                continue
             test_suite_name = test_suite_name_list[1]
             test_suite_abi = None
             if "." in test_suite_name:
