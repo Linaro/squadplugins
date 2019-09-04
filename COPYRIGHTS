@@ -1,0 +1,8 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: squadplugins
+Upstream-Contact: SQUAD development mailing list <squad-dev@lists.linaro.org>
+Source: https://github.com/Linaro/squadplugins
+
+Files: *
+Copyright: 2018-2019 Linaro Limited
+License: AGPL-3.0-or-later
