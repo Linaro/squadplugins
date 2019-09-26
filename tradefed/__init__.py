@@ -131,7 +131,7 @@ class Tradefed(BasePlugin):
         suites = testjob.backend.get_implementation().proxy.results.get_testjob_suites_list_yaml(testjob.job_id)
         y = None
         try:
-            y = yaml.load(suites)
+            y = yaml.load(suites, Loader=yaml.CLoader)
         except yaml.parser.ParserError as e:
             logger.warning(e)
             return None
@@ -187,16 +187,16 @@ class Tradefed(BasePlugin):
 
     def postprocess_testjob(self, testjob):
         # get related testjob
-        logger.info("Starting CTS/VTS plugin for test job: %s" % testjob.pk)
-        logging.debug("Processing test job: %s" % testjob.job_id)
+        logger.info("Starting CTS/VTS plugin for test job: %s" % testjob)
+        logging.debug("Processing test job: %s" % testjob)
         if not testjob.backend.implementation_type == 'lava':
-            logger.warning("Test job %s doesn't come from LAVA" % testjob.job_id)
+            logger.warning("Test job %s doesn't come from LAVA" % testjob)
             logger.debug(testjob.backend.implementation_type)
             return # this plugin only applies to LAVA
         # check if testjob is a tradefed job
         if testjob.definition:
             logger.debug("Loading test job definition")
-            job_definition = yaml.load(testjob.definition)
+            job_definition = yaml.load(testjob.definition, Loader=yaml.CLoader)
             # find all tests
             if 'actions' in job_definition.keys():
                 for test_action in [action for action in job_definition['actions'] if'test' in action.keys()]:
@@ -228,6 +228,6 @@ class Tradefed(BasePlugin):
                                         self._create_testrun_attachment(testjob.testrun, "teadefed_stdout.txt", results.tradefed_stdout)
                                     if results.tradefed_logcat is not None:
                                         self._create_testrun_attachment(testjob.testrun, "teadefed_logcat.txt", results.tradefed_logcat)
-        logger.info("Finishing CTS/VTS plugin for test run: %s" % testjob.pk)
+        logger.info("Finishing CTS/VTS plugin for test run: %s" % testjob)
 
 
