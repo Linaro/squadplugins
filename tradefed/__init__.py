@@ -131,7 +131,7 @@ class Tradefed(BasePlugin):
         suites = testjob.backend.get_implementation().proxy.results.get_testjob_suites_list_yaml(testjob.job_id)
         y = None
         try:
-            y = yaml.load(suites)
+            y = yaml.load(suites, Loader=yaml.CLoader)
         except yaml.parser.ParserError as e:
             logger.warning(e)
             return None
@@ -196,7 +196,7 @@ class Tradefed(BasePlugin):
         # check if testjob is a tradefed job
         if testjob.definition:
             logger.debug("Loading test job definition")
-            job_definition = yaml.load(testjob.definition)
+            job_definition = yaml.load(testjob.definition, Loader=yaml.CLoader)
             # find all tests
             if 'actions' in job_definition.keys():
                 for test_action in [action for action in job_definition['actions'] if'test' in action.keys()]:
