@@ -120,7 +120,10 @@ class Tradefed(BasePlugin):
                             if "tradefed-logcat.txt" in member.name:
                                 results.tradefed_logcat = self._extract_member(t, member)
                                 logger.debug("tradefed_logcat object is empty: %s" % (results.tradefed_logcat is None))
-                except tarfile.ReadError as e:
+                except tarfile.TarError as e:
+                    logger.warning(e)
+                except EOFError as e:
+                    # this can happen when tarfile is corrupted
                     logger.warning(e)
                 except requests.exceptions.Timeout as e:
                     logger.warning(e)

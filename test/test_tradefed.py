@@ -1,5 +1,6 @@
 import logging
 import os
+import tarfile
 import unittest
 from io import StringIO
 from mock import PropertyMock, MagicMock, Mock, patch
@@ -633,6 +634,60 @@ class TradefedLogsPluginTest(unittest.TestCase):
         self.assertIsNotNone(results.test_results)
         self.assertIsNotNone(results.tradefed_stdout)
         self.assertIsNotNone(results.tradefed_logcat)
+
+    @patch("tarfile.TarFile.getmembers")
+    @patch("requests.get")
+    def test_download_results_short_file(self, get_mock, tarfile_mock):
+        requests_result_mock = Mock()
+        status_code_mock = PropertyMock(return_value=200)
+        type(requests_result_mock).status_code = status_code_mock
+        content_mock = PropertyMock(return_value=self.tarfile.read())
+        type(requests_result_mock).content = content_mock
+        get_mock.return_value = requests_result_mock
+        tarfile_mock.side_effect = EOFError()
+        results = self.plugin._download_results(RESULT_DICT)
+        status_code_mock.assert_called_once()
+        content_mock.assert_called_once()
+        self.assertEqual(self.plugin.tradefed_results_url, RESULT_URL)
+        self.assertIsNone(results.test_results)
+        self.assertIsNone(results.tradefed_stdout)
+        self.assertIsNone(results.tradefed_logcat)
+
+    @patch("tarfile.TarFile.getmembers")
+    @patch("requests.get")
+    def test_download_results_corrupted_compression_readerror(self, get_mock, tarfile_mock):
+        requests_result_mock = Mock()
+        status_code_mock = PropertyMock(return_value=200)
+        type(requests_result_mock).status_code = status_code_mock
+        content_mock = PropertyMock(return_value=self.tarfile.read())
+        type(requests_result_mock).content = content_mock
+        get_mock.return_value = requests_result_mock
+        tarfile_mock.side_effect = tarfile.ReadError()
+        results = self.plugin._download_results(RESULT_DICT)
+        status_code_mock.assert_called_once()
+        content_mock.assert_called_once()
+        self.assertEqual(self.plugin.tradefed_results_url, RESULT_URL)
+        self.assertIsNone(results.test_results)
+        self.assertIsNone(results.tradefed_stdout)
+        self.assertIsNone(results.tradefed_logcat)
+
+    @patch("tarfile.TarFile.getmembers")
+    @patch("requests.get")
+    def test_download_results_corrupted_compression_headererror(self, get_mock, tarfile_mock):
+        requests_result_mock = Mock()
+        status_code_mock = PropertyMock(return_value=200)
+        type(requests_result_mock).status_code = status_code_mock
+        content_mock = PropertyMock(return_value=self.tarfile.read())
+        type(requests_result_mock).content = content_mock
+        get_mock.return_value = requests_result_mock
+        tarfile_mock.side_effect = tarfile.HeaderError()
+        results = self.plugin._download_results(RESULT_DICT)
+        status_code_mock.assert_called_once()
+        content_mock.assert_called_once()
+        self.assertEqual(self.plugin.tradefed_results_url, RESULT_URL)
+        self.assertIsNone(results.test_results)
+        self.assertIsNone(results.tradefed_stdout)
+        self.assertIsNone(results.tradefed_logcat)
 
     @patch("requests.get")
     def test_download_results_no_tarball(self, get_mock):
