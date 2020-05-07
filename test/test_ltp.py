@@ -11,6 +11,7 @@ test_1: some log 3
 test_3: some log 1
 test_3: some log 2
 test_3: some log 3
+test[a-1]: some log
 """
 
 logger = logging.getLogger()
@@ -63,6 +64,26 @@ class LtpLogsPluginTest(unittest.TestCase):
         test_3_name.assert_called()
         test_3_log.assert_called()
         test_3.save.assert_called()
+
+    def test_tests_with_regex_characters(self):
+        test = Mock()
+        test_name = PropertyMock(return_value="test[a-1]")
+        type(test).name = test_name
+        test_log = PropertyMock()
+        type(test).log = test_log
+
+        testrun = Mock()
+        testrun_log = PropertyMock(return_value=TEST_LOG)
+        type(testrun).log_file = testrun_log
+
+        testrun.tests = Mock()
+        testrun.tests.filter.return_value = [test]
+
+        self.plugin.postprocess_testrun(testrun)
+
+        test_name.assert_called()
+        test_log.assert_called()
+        test.save.assert_called()
 
 
 if __name__ == "__main__":
