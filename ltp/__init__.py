@@ -12,7 +12,7 @@ class LtpLogs(BasePlugin):
     def postprocess_testrun(self, testrun):
         for test in testrun.tests.filter(result=False):
             logger.debug("Assigning LTP logs to %s" % test.name)
-            regex = re.compile("^%s.*$" % test.name, re.MULTILINE)
+            regex = re.compile("^%s.*$" % re.escape(test.name), re.MULTILINE)
             log_results = regex.findall(testrun.log_file)
             for match in log_results:
                 logger.debug("Found log line for test: %s" % test.name)
