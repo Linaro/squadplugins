@@ -25,6 +25,7 @@ class ResultFiles(object):
     test_results = None
     tradefed_logcat = None
     tradefed_stdout = None
+    tradefed_zipfile = None
 
 
 class Tradefed(BasePlugin):
@@ -112,6 +113,7 @@ class Tradefed(BasePlugin):
                     if result_tarball_request.status_code == 200:
                         result_tarball_request.raw.decode_content = True
                         r = BytesIO(result_tarball_request.content)
+                        results.tradefed_zipfile = r
                         logger.debug("Retrieved %s bytes" % r.getbuffer().nbytes)
                         t = tarfile.open(fileobj=r, mode='r:xz')
                         for member in t.getmembers():
@@ -226,11 +228,12 @@ class Tradefed(BasePlugin):
                                 return self._download_results(test_result)
         return None
 
-    def _create_testrun_attachment(self, testrun, name, extracted_file):
+    def _create_testrun_attachment(self, testrun, name, extracted_file, mimetype):
         testrun.attachments.create(
             filename = name,
             data = extracted_file.contents.read(),
-            length = extracted_file.length
+            length = extracted_file.length,
+            mimetype = mimetype
         )
 
     def postprocess_testjob(self, testjob):
@@ -271,11 +274,13 @@ class Tradefed(BasePlugin):
                                     if results.test_results is not None:
                                         self._assign_test_log(results.test_results.contents, failed)
                                     if results.test_results is not None:
-                                        self._create_testrun_attachment(testjob.testrun, "test_results.xml", results.test_results)
+                                        self._create_testrun_attachment(testjob.testrun, "test_results.xml", results.test_results, "application/xml")
                                     if results.tradefed_stdout is not None:
-                                        self._create_testrun_attachment(testjob.testrun, "teadefed_stdout.txt", results.tradefed_stdout)
+                                        self._create_testrun_attachment(testjob.testrun, "teadefed_stdout.txt", results.tradefed_stdout, "text/plain")
                                     if results.tradefed_logcat is not None:
-                                        self._create_testrun_attachment(testjob.testrun, "teadefed_logcat.txt", results.tradefed_logcat)
+                                        self._create_testrun_attachment(testjob.testrun, "teadefed_logcat.txt", results.tradefed_logcat, "text/plain")
+                                    if results.tradefed_zipfile is not None:
+                                        self._create_testrun_attachment(testjob.testrun, "tradefed.zip", results.tradefed_zipfile, "application/zip")
         logger.info("Finishing CTS/VTS plugin for test run: %s" % testjob)
 
 
