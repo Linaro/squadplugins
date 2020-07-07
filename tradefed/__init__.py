@@ -6,9 +6,14 @@ import yaml
 import xml.etree.ElementTree as ET
 from io import BytesIO
 from squad.plugins import Plugin as BasePlugin
+from urllib.parse import urljoin
 
 
 logger = logging.getLogger()
+
+
+class PaginatedObjectException(Exception):
+    pass
 
 
 class ExtractedResult(object):
@@ -129,56 +134,96 @@ class Tradefed(BasePlugin):
                     logger.warning(e)
         return results
 
+    def __get_paginated_objects(self, url, lava_implementation):
+        # this method only applies to REST API
+        object_request = requests.get(url, headers=lava_implementation.authentication)
+        objects = []
+        if object_request.status_code == 200:
+            object_list = object_request.json()
+            objects = object_list['results']
+            while object_list['next']:
+                object_request = requests.get(object_list['next'], headers=lava_implementation.authentication)
+                if object_request.status_code == 200:
+                    object_list = object_request.json()
+                    objects = objects + object_list['results']
+                else:
+                    # don't raise exception as some results were extracted
+                    break
+        else:
+            raise PaginatedObjectException()
+        return objects
+
     def _get_from_artifactorial(self, testjob, suite_name):
         logger.debug("Retrieving result summary for job: %s" % testjob.job_id)
-        suites = testjob.backend.get_implementation().proxy.results.get_testjob_suites_list_yaml(testjob.job_id)
-        y = None
-        try:
-            y = yaml.load(suites, Loader=yaml.CLoader)
-        except yaml.parser.ParserError as e:
-            logger.warning(e)
-            return None
+        suites = None
+        lava_implementation = testjob.backend.get_implementation()
+        if lava_implementation.use_xml_rpc:
+            suites = lava_implementation.proxy.results.get_testjob_suites_list_yaml(testjob.job_id)
+            try:
+                suites = yaml.load(suites, Loader=yaml.CLoader)
+            except yaml.parser.ParserError as e:
+                logger.warning(e)
+                return None
 
-        if not y:
-            logger.debug("Something went wrong when calling results.get_testjob_suites_list_yaml from LAVA")
-            return None
+            if not suites:
+                logger.debug("Something went wrong when calling results.get_testjob_suites_list_yaml from LAVA")
+                return None
+        else:
+            suites_url = urljoin(testjob.backend.get_implementation().api_url_base, "jobs/{job_id}/suites/?name__contains={suite_name}".format(job_id=testjob.job_id, suite_name=suite_name))
+            try:
+                suites = self.__get_paginated_objects(suites_url, lava_implementation)
+            except PaginatedObjectException:
+                logger.error("Unable to retrieve suites for job: {job_id}".format(job_id=testjob.job_id))
+                return None
 
-        for suite in y:
+        for suite in suites:
             if suite_name in suite['name']:
-                limit = 500
-                offset = 0
-                results = testjob.backend.get_implementation().proxy.results.get_testsuite_results_yaml(
-                    testjob.job_id,
-                    suite['name'],
-                    limit,
-                    offset)
-                yaml_results = None
-                try:
-                    yaml_results = yaml.load(results, Loader=yaml.CLoader)
-                except yaml.scanner.ScannerError as e:
-                    logger.warning(e)
-                    return None
-
-                if not yaml_results:
-                    logger.debug("Something went wrong with results.get_testsuite_results_yaml from LAVA")
-                    return None
-
-                while True:
-                    if len(yaml_results) > 0:
-                        for result in yaml_results:
-                            if result['name'] == 'test-attachment':
-                                return self._download_results(result)
-                        offset = offset + limit
-                        logger.debug("requesting results for %s with offset of %s"
-                                     % (suite['name'], offset))
-                        results = testjob.backend.get_implementation().proxy.results.get_testsuite_results_yaml(
-                            testjob.job_id,
-                            suite['name'],
-                            limit,
-                            offset)
+                if lava_implementation.use_xml_rpc:
+                    limit = 500
+                    offset = 0
+                    results = testjob.backend.get_implementation().proxy.results.get_testsuite_results_yaml(
+                        testjob.job_id,
+                        suite['name'],
+                        limit,
+                        offset)
+                    yaml_results = None
+                    try:
                         yaml_results = yaml.load(results, Loader=yaml.CLoader)
-                    else:
-                        break
+                    except yaml.scanner.ScannerError as e:
+                        logger.warning(e)
+                        return None
+
+                    if not yaml_results:
+                        logger.debug("Something went wrong with results.get_testsuite_results_yaml from LAVA")
+                        return None
+
+                    while True:
+                        if len(yaml_results) > 0:
+                            for result in yaml_results:
+                                if result['name'] == 'test-attachment':
+                                    return self._download_results(result)
+                            offset = offset + limit
+                            logger.debug("requesting results for %s with offset of %s"
+                                         % (suite['name'], offset))
+                            results = testjob.backend.get_implementation().proxy.results.get_testsuite_results_yaml(
+                                testjob.job_id,
+                                suite['name'],
+                                limit,
+                                offset)
+                            yaml_results = yaml.load(results, Loader=yaml.CLoader)
+                        else:
+                            break
+                else:
+                    test_attachment_url = urljoin(testjob.backend.get_implementation().api_url_base, "jobs/{job_id}/suites/{suite_id}/tests/?name=test-attachment".format(job_id=testjob.job_id, suite_id=suite['id']))
+                    test_attachment_request = requests.get(test_attachment_url, headers=lava_implementation.authentication)
+                    if test_attachment_request.status_code == 200:
+                        test_attachmet_results = test_attachment_request.json()
+                        for test_result in test_attachmet_results['results']:
+                            # there should be only one
+                            metadata = yaml.load(test_result['metadata'], Loader=yaml.CLoader)
+                            if 'reference' in metadata.keys():
+                                test_result['metadata'] = metadata
+                                return self._download_results(test_result)
         return None
 
     def _create_testrun_attachment(self, testrun, name, extracted_file):
