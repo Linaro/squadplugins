@@ -1,12 +1,17 @@
 import logging
+import os
 import requests
 import tarfile
 import xmlrpc
 import yaml
 import xml.etree.ElementTree as ET
 from io import BytesIO
+from django.conf import settings
 from squad.plugins import Plugin as BasePlugin
 from urllib.parse import urljoin
+from squad.core.utils import join_name
+from squad.core.models import Suite, SuiteMetadata, Test, KnownIssue, Status
+from squad.core.tasks import get_suite
 
 
 logger = logging.getLogger()
@@ -23,6 +28,9 @@ class ExtractedResult(object):
 
 class ResultFiles(object):
     test_results = None
+    test_result_xslt = None
+    test_result_css = None
+    test_result_image = None
     tradefed_logcat = None
     tradefed_stdout = None
     tradefed_zipfile = None
@@ -42,20 +50,152 @@ class Tradefed(BasePlugin):
             if log_node is not None:
                 return log_node
 
-    def _assign_test_log(self, buf, test_list):
+    def _convert_paths(self, testrun, results):
+        base_url = settings.BASE_URL
+        results_stringio = BytesIO()
+        for line in results.test_results.contents:
+            line_to_write = line.decode().replace(
+                "compatibility_result.xsl",
+                "{base_url}/{group_slug}/{project_slug}/build/{build_version}/attachments/testrun/{testrun_id}/compatibility_result.xsl".format(
+                    base_url=base_url,
+                    group_slug=testrun.build.project.group.slug,
+                    project_slug=testrun.build.project.slug,
+                    build_version=testrun.build.version,
+                    testrun_id=testrun.id)
+            )
+            results_stringio.write(line_to_write.encode('utf-8'))
+        results_stringio.seek(0, os.SEEK_END)
+        results.test_results.length = results_stringio.tell()
+        results_stringio.seek(0)
+        results.test_results.contents = results_stringio
+        if results.test_result_xslt is not None:
+            result_xslt_stringio = BytesIO()
+            for line in results.test_result_xslt.contents:
+                result_xslt_stringio.write(
+                    line.decode().replace(
+                        "compatibility_result.css",
+                        "{base_url}/{group_slug}/{project_slug}/build/{build_version}/attachments/testrun/{testrun_id}/compatibility_result.css".format(
+                            base_url=base_url,
+                            group_slug=testrun.build.project.group.slug,
+                            project_slug=testrun.build.project.slug,
+                            build_version=testrun.build.version,
+                            testrun_id=testrun.id)
+                        ).replace("logo.png", "{base_url}/{group_slug}/{project_slug}/build/{build_version}/attachments/testrun/{testrun_id}/logo.png".format(
+                            base_url=base_url,
+                            group_slug=testrun.build.project.group.slug,
+                            project_slug=testrun.build.project.slug,
+                            build_version=testrun.build.version,
+                            testrun_id=testrun.id)
+                        ).encode('utf-8')
+                    )
+            result_xslt_stringio.seek(0, os.SEEK_END)
+            results.test_result_xslt.length = result_xslt_stringio.tell()
+            result_xslt_stringio.seek(0)
+            results.test_result_xslt.contents = result_xslt_stringio
+
+
+    def __parse_xml_results(self, buf):
         if buf is None:
             logger.warning("Results file doesn't exist")
-            return
+            return None
         # assume buf is a file-like object
         tradefed_tree = None
         try:
             tradefed_tree = ET.parse(buf)
         except ET.ParseError as e:
             logger.warning(e)
-            return
+            return None
+        buf.seek(0)
+        return tradefed_tree
+
+    def _extract_cts_results(self, buf, testrun, suite_prefix):
+        tradefed_tree = self.__parse_xml_results(buf)
         if tradefed_tree is None:
             return
-        buf.seek(0)
+
+        issues = {}
+        for issue in KnownIssue.active_by_environment(testrun.environment):
+            issues.setdefault(issue.test_name, [])
+            issues[issue.test_name].append(issue)
+
+        test_elems = tradefed_tree.findall(".//Test")
+        logger.debug("Tests: {}".format(len(test_elems)))
+        elems = tradefed_tree.findall('Module')
+        logger.debug("Modules: {}".format(len(elems)))
+        tr_status_dict = {}
+        tr_status_dict[None] = testrun.status.get(suite=None)
+        for elem in elems:
+            # Naming: Module Name + Test Case Name + Test Name
+            if 'abi' in elem.attrib.keys():
+                module_name = '.'.join([elem.attrib['abi'], elem.attrib['name']])
+            else:
+                module_name = elem.attrib['name']
+            logger.debug("Extracting tests for module: {}".format(module_name))
+            test_cases = elem.findall('.//TestCase')
+            suite_metadata_list = []
+            suite_list = []
+            logger.debug("Extracting suite names")
+            atomic_test_suite_name = "{suite_prefix}/{module_name}".format(suite_prefix=suite_prefix, module_name=module_name)
+            logger.debug("creating suite metadata: {}".format(atomic_test_suite_name))
+            suite_metadata, _ = SuiteMetadata.objects.get_or_create(suite=atomic_test_suite_name, kind='suite')
+            suite, _ = Suite.objects.get_or_create(slug=atomic_test_suite_name, project=testrun.build.project, defaults={"metadata": suite_metadata})
+            logger.debug("Adding status with suite: {suite_prefix}/{module_name}".format(suite_prefix=suite_prefix, module_name=module_name))
+            tr_status_dict[atomic_test_suite_name] = Status(test_run=testrun, suite=suite)
+            for test_case in test_cases:
+                test_case_name = test_case.get("name")
+                atomic_test_suite_name = "{module_name}/{test_case_name}".format(module_name=module_name, test_case_name=test_case_name)
+                tests = test_case.findall('.//Test')
+                logger.debug("Extracting TestCase: {test_case_name}".format(test_case_name=test_case_name))
+                logger.debug("Adding {} testcases".format(len(tests)))
+                test_list = []
+                for atomic_test in tests:
+                    atomic_test_result = atomic_test.get("result")
+                    decoded_test_result = atomic_test_result == 'pass'
+                    if atomic_test_result == 'skip':
+                        decoded_test_result = None
+                    atomic_test_name = "{test_case_name}.{test_name}".format(test_case_name=test_case_name, test_name=atomic_test.get("name"))
+                    atomic_test_log = ""
+                    trace_node = atomic_test.find('.//StackTrace')
+                    if trace_node is not None:
+                        atomic_test_log = trace_node.text
+
+                    metadata, _ = SuiteMetadata.objects.get_or_create(suite=atomic_test_suite_name, name=atomic_test_name, kind='test')
+                    full_name = join_name(suite.slug, atomic_test_name)
+                    test_issues = issues.get(full_name, [])
+                    test_list.append(Test(
+                        test_run=testrun,
+                        suite=suite,
+                        metadata=metadata,
+                        name=atomic_test_name,
+                        result=decoded_test_result,
+                        log=atomic_test_log,
+                        has_known_issues=bool(test_issues),
+                    ))
+                    if decoded_test_result is True:
+                        tr_status_dict[suite.slug].tests_pass += 1
+                    elif decoded_test_result is False:
+                        if test_issues:
+                            tr_status_dict[suite.slug].tests_xfail += 1
+                        else:
+                            tr_status_dict[suite.slug].tests_fail += 1
+                    else:
+                        tr_status_dict[suite.slug].tests_skip += 1
+                Test.objects.bulk_create(test_list)
+        # retrieve all tests that should be associated with issues
+        issue_tests = testrun.tests.filter(name__in=issues.keys())
+        # add issues to tests
+        for test in issue_tests:
+            test.known_issues.add(issues[test.name])
+        for tr_status_name, tr_status in tr_status_dict.items():
+            tr_status.save()
+
+
+    def _assign_test_log(self, buf, test_list):
+        # assume buf is a file-like object
+        logger.debug("About to parse XML from buffer")
+        tradefed_tree = self.__parse_xml_results(buf)
+        if tradefed_tree is None:
+            return
         for test in test_list:
             # search in etree for relevant test
             logger.debug("processing %s/%s" % (test.suite, test.name))
@@ -113,7 +253,9 @@ class Tradefed(BasePlugin):
                     if result_tarball_request.status_code == 200:
                         result_tarball_request.raw.decode_content = True
                         r = BytesIO(result_tarball_request.content)
-                        results.tradefed_zipfile = r
+                        results.tradefed_zipfile = ExtractedResult()
+                        results.tradefed_zipfile.contents = r
+                        results.tradefed_zipfile.length = len(result_tarball_request.content)
                         logger.debug("Retrieved %s bytes" % r.getbuffer().nbytes)
                         t = tarfile.open(fileobj=r, mode='r:xz')
                         for member in t.getmembers():
@@ -121,6 +263,15 @@ class Tradefed(BasePlugin):
                             if "test_result.xml" in member.name:
                                 results.test_results = self._extract_member(t, member)
                                 logger.debug("test_results object is empty: %s" % (results.test_results is None))
+                            if "compatibility_result.xsl" in member.name:
+                                results.test_result_xslt = self._extract_member(t, member)
+                                logger.debug("test_result_xslt object is empty: %s" % (results.test_result_xslt is None))
+                            if "compatibility_result.css" in member.name:
+                                results.test_result_css = self._extract_member(t, member)
+                                logger.debug("test_result_css object is empty: %s" % (results.test_result_css is None))
+                            if "logo.png" in member.name:
+                                results.test_result_image = self._extract_member(t, member)
+                                logger.debug("test_result_image object is empty: %s" % (results.test_result_image is None))
                             if "tradefed-stdout.txt" in member.name:
                                 results.tradefed_stdout = self._extract_member(t, member)
                                 logger.debug("tradefed_stdout object is empty: %s" % (results.tradefed_stdout is None))
@@ -264,17 +415,36 @@ class Tradefed(BasePlugin):
                                 logger.error(err.errcode)
                                 logger.error(err.errmsg)
 
+                            logger.debug("Processing results")
                             if results is not None:
                                 # add metadata key for taball download
                                 testjob.testrun.metadata["tradefed_results_url_%s" % testjob.job_id] = self.tradefed_results_url
+                                logger.debug("about to save testrun")
                                 testjob.testrun.save()
+                                logger.debug("testrun saved")
                                 # only failed tests have logs
                                 if testjob.testrun is not None:
-                                    failed = testjob.testrun.tests.filter(result=False)
+                                    ps = None
+                                    if testjob.target.project_settings is not None:
+                                        ps = yaml.safe_load(testjob.target.project_settings)
+                                    if ps and ps.get("PLUGINS_TRADEFED_EXTRACT_AGGREGATED", False) and \
+                                            'params' in test_definition.keys() and \
+                                            ('RESULTS_FORMAT' not in test_definition['params'] or ('RESULTS_FORMAT' in test_definition['params'] and test_definition['params']['RESULTS_FORMAT'] == 'aggregated')):
+                                        # extract_cts_results also assigns the log
+                                        self._extract_cts_results(results.test_results.contents, testjob.testrun, test_definition['name'])
+                                    else:
+                                        failed = testjob.testrun.tests.filter(result=False)
+                                        if results.test_results is not None:
+                                            self._assign_test_log(results.test_results.contents, failed)
                                     if results.test_results is not None:
-                                        self._assign_test_log(results.test_results.contents, failed)
-                                    if results.test_results is not None:
+                                        self._convert_paths(testjob.testrun, results)
                                         self._create_testrun_attachment(testjob.testrun, "test_results.xml", results.test_results, "application/xml")
+                                    if results.test_result_xslt is not None:
+                                        self._create_testrun_attachment(testjob.testrun, "compatibility_result.xsl", results.test_result_xslt, "application/xslt+xml")
+                                    if results.test_result_css is not None:
+                                        self._create_testrun_attachment(testjob.testrun, "compatibility_result.css", results.test_result_css, "text/css")
+                                    if results.test_result_image is not None:
+                                        self._create_testrun_attachment(testjob.testrun, "logo.png", results.test_result_image, "image/png")
                                     if results.tradefed_stdout is not None:
                                         self._create_testrun_attachment(testjob.testrun, "teadefed_stdout.txt", results.tradefed_stdout, "text/plain")
                                     if results.tradefed_logcat is not None:
