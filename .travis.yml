@@ -7,8 +7,8 @@ addons:
   postgresql: 9.5
 
 env:
-  - SCRIPT="nosetests" DJANGO=1.11 TESTENV=travis-postgresql DATABASE=ENGINE=django.db.backends.postgresql_psycopg2:NAME=squad:USER=postgres:PASSWORD=squad:HOST=127.0.0.1:PORT=5432
-  - SCRIPT="nosetests" DJANGO=1.11 TESTENV=travis-sqlite3 DATABASE=
+  - SCRIPT="nosetests test" DJANGO=1.11 TESTENV=travis-postgresql DATABASE=ENGINE=django.db.backends.postgresql_psycopg2:NAME=squad:USER=postgres:PASSWORD=squad:HOST=127.0.0.1:PORT=5432
+  - SCRIPT="nosetests test" DJANGO=1.11 TESTENV=travis-sqlite3 DATABASE=
   - SCRIPT="docker run -v $(pwd):/squadplugins --workdir /squadplugins fsfe/reuse lint"
 
 install:

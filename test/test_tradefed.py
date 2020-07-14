@@ -1,8 +1,16 @@
-import logging
+import django
 import os
+
+
+os.environ['DJANGO_SETTINGS_MODULE'] = 'squad.settings'
+django.setup()
+
+
+import logging
 import tarfile
 import unittest
-from io import StringIO
+import tradefed
+from io import StringIO, BytesIO
 from mock import PropertyMock, MagicMock, Mock, patch
 from tradefed import Tradefed, ResultFiles, ExtractedResult
 
@@ -439,6 +447,10 @@ class TradefedLogsPluginTest(unittest.TestCase):
         type(testjob_mock.backend).implementation_type = implementation_type_mock
         definition_mock = PropertyMock(return_value=JOB_DEFINITION)
         type(testjob_mock).definition = definition_mock
+        testjob_target = MagicMock()
+        project_settings_mock = PropertyMock(return_value='{}')
+        type(testjob_target).project_settings = project_settings_mock
+        type(testjob_mock).target = testjob_target
         self.plugin.postprocess_testjob(testjob_mock)
         implementation_type_mock.assert_called_once()
         definition_mock.assert_called()
@@ -471,6 +483,10 @@ class TradefedLogsPluginTest(unittest.TestCase):
         type(testjob_mock.backend).implementation_type = implementation_type_mock
         definition_mock = PropertyMock(return_value=JOB_DEFINITION_INTERACTIVE)
         type(testjob_mock).definition = definition_mock
+        testjob_target = MagicMock()
+        project_settings_mock = PropertyMock(return_value='{}')
+        type(testjob_target).project_settings = project_settings_mock
+        type(testjob_mock).target = testjob_target
         self.plugin.postprocess_testjob(testjob_mock)
         implementation_type_mock.assert_called_once()
         definition_mock.assert_called()
@@ -494,7 +510,7 @@ class TradefedLogsPluginTest(unittest.TestCase):
         results_url_mock.return_value = "http://foo.com"
         result_files = ResultFiles()
         result_files.test_results = ExtractedResult()
-        result_files.test_results.contents = "abc"
+        result_files.test_results.contents = BytesIO("abc".encode("utf-8"))
         result_files.test_results.length = 3
         get_from_artifactorial_mock.return_value = result_files
         testjob_mock = MagicMock()
@@ -507,6 +523,10 @@ class TradefedLogsPluginTest(unittest.TestCase):
         type(testjob_mock.backend).implementation_type = implementation_type_mock
         definition_mock = PropertyMock(return_value=JOB_DEFINITION)
         type(testjob_mock).definition = definition_mock
+        testjob_target = MagicMock()
+        project_settings_mock = PropertyMock(return_value='{}')
+        type(testjob_target).project_settings = project_settings_mock
+        type(testjob_mock).target = testjob_target
         self.plugin.postprocess_testjob(testjob_mock)
         implementation_type_mock.assert_called_once()
         definition_mock.assert_called()
@@ -521,7 +541,7 @@ class TradefedLogsPluginTest(unittest.TestCase):
         name = "name"
         extracted_file_mock = Mock()
         type(extracted_file_mock).length = PropertyMock(return_value=2)
-        self.plugin._create_testrun_attachment(testrun_mock, name, extracted_file_mock)
+        self.plugin._create_testrun_attachment(testrun_mock, name, extracted_file_mock, "text/plain")
         testrun_mock.attachments.create.assert_called()
 
     @patch("tradefed.Tradefed._download_results")
@@ -629,7 +649,7 @@ class TradefedLogsPluginTest(unittest.TestCase):
         get_mock.return_value = requests_result_mock
         results = self.plugin._download_results(RESULT_DICT)
         status_code_mock.assert_called_once()
-        content_mock.assert_called_once()
+        self.assertEqual(content_mock.call_count, 2)
         self.assertEqual(self.plugin.tradefed_results_url, RESULT_URL)
         self.assertIsNotNone(results.test_results)
         self.assertIsNotNone(results.tradefed_stdout)
@@ -647,7 +667,7 @@ class TradefedLogsPluginTest(unittest.TestCase):
         tarfile_mock.side_effect = EOFError()
         results = self.plugin._download_results(RESULT_DICT)
         status_code_mock.assert_called_once()
-        content_mock.assert_called_once()
+        self.assertEqual(content_mock.call_count, 2)
         self.assertEqual(self.plugin.tradefed_results_url, RESULT_URL)
         self.assertIsNone(results.test_results)
         self.assertIsNone(results.tradefed_stdout)
@@ -665,7 +685,7 @@ class TradefedLogsPluginTest(unittest.TestCase):
         tarfile_mock.side_effect = tarfile.ReadError()
         results = self.plugin._download_results(RESULT_DICT)
         status_code_mock.assert_called_once()
-        content_mock.assert_called_once()
+        self.assertEqual(content_mock.call_count, 2)
         self.assertEqual(self.plugin.tradefed_results_url, RESULT_URL)
         self.assertIsNone(results.test_results)
         self.assertIsNone(results.tradefed_stdout)
@@ -683,7 +703,7 @@ class TradefedLogsPluginTest(unittest.TestCase):
         tarfile_mock.side_effect = tarfile.HeaderError()
         results = self.plugin._download_results(RESULT_DICT)
         status_code_mock.assert_called_once()
-        content_mock.assert_called_once()
+        self.assertEqual(content_mock.call_count, 2)
         self.assertEqual(self.plugin.tradefed_results_url, RESULT_URL)
         self.assertIsNone(results.test_results)
         self.assertIsNone(results.tradefed_stdout)
@@ -699,7 +719,7 @@ class TradefedLogsPluginTest(unittest.TestCase):
         get_mock.return_value = requests_result_mock
         results = self.plugin._download_results(RESULT_DICT)
         status_code_mock.assert_called_once()
-        content_mock.assert_called_once()
+        self.assertEqual(content_mock.call_count, 2)
         self.assertEqual(self.plugin.tradefed_results_url, RESULT_URL)
         self.assertIsNone(results.test_results)
         self.assertIsNone(results.tradefed_stdout)
