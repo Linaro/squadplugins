@@ -1,6 +1,6 @@
 import logging
 import unittest
-from mock import PropertyMock, Mock
+from unittest.mock import PropertyMock, Mock
 from ltp import LtpLogs
 
 

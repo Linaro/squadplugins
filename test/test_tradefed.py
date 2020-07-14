@@ -11,7 +11,7 @@ import tarfile
 import unittest
 import tradefed
 from io import StringIO, BytesIO
-from mock import PropertyMock, MagicMock, Mock, patch
+from unittest.mock import PropertyMock, MagicMock, Mock, patch
 from tradefed import Tradefed, ResultFiles, ExtractedResult
 
 
