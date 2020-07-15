@@ -21,5 +21,5 @@ setup(
     and LTP results (ltp).
     """,
     platforms='any',
-    install_requires=['squad>=0.29', 'requests']
+    install_requires=['squad>=1.16', 'requests']
 )
