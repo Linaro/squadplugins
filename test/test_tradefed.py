@@ -1,9 +1,17 @@
-import logging
+import django
 import os
+
+
+os.environ['DJANGO_SETTINGS_MODULE'] = 'squad.settings'
+django.setup()
+
+
+import logging
 import tarfile
 import unittest
-from io import StringIO
-from mock import PropertyMock, MagicMock, Mock, patch
+import tradefed
+from io import StringIO, BytesIO
+from unittest.mock import PropertyMock, MagicMock, Mock, patch
 from tradefed import Tradefed, ResultFiles, ExtractedResult
 
 
@@ -439,12 +447,16 @@ class TradefedLogsPluginTest(unittest.TestCase):
         type(testjob_mock.backend).implementation_type = implementation_type_mock
         definition_mock = PropertyMock(return_value=JOB_DEFINITION)
         type(testjob_mock).definition = definition_mock
+        testjob_target = MagicMock()
+        project_settings_mock = PropertyMock(return_value='{}')
+        type(testjob_target).project_settings = project_settings_mock
+        type(testjob_mock).target = testjob_target
         self.plugin.postprocess_testjob(testjob_mock)
-        implementation_type_mock.assert_called_once()
-        definition_mock.assert_called()
-        results_url_mock.assert_called()
-        testjob_mock.testrun.metadata.__setitem__.assert_called()
-        testjob_mock.testrun.save.assert_called()
+        implementation_type_mock.assert_called_once_with()
+        definition_mock.assert_called_with()
+        results_url_mock.assert_called_with()
+        testjob_mock.testrun.metadata.__setitem__.assert_called_with('tradefed_results_url_1234', 'http://foo.com')
+        testjob_mock.testrun.save.assert_called_with()
         assign_test_log_mock.assert_not_called()
         create_testrun_attachment_mock.assert_not_called()
 
@@ -471,12 +483,16 @@ class TradefedLogsPluginTest(unittest.TestCase):
         type(testjob_mock.backend).implementation_type = implementation_type_mock
         definition_mock = PropertyMock(return_value=JOB_DEFINITION_INTERACTIVE)
         type(testjob_mock).definition = definition_mock
+        testjob_target = MagicMock()
+        project_settings_mock = PropertyMock(return_value='{}')
+        type(testjob_target).project_settings = project_settings_mock
+        type(testjob_mock).target = testjob_target
         self.plugin.postprocess_testjob(testjob_mock)
-        implementation_type_mock.assert_called_once()
-        definition_mock.assert_called()
-        results_url_mock.assert_called()
-        testjob_mock.testrun.metadata.__setitem__.assert_called()
-        testjob_mock.testrun.save.assert_called()
+        implementation_type_mock.assert_called_once_with()
+        definition_mock.assert_called_with()
+        results_url_mock.assert_called_with()
+        testjob_mock.testrun.metadata.__setitem__.assert_called_with('tradefed_results_url_1234', 'http://foo.com')
+        testjob_mock.testrun.save.assert_called_with()
         assign_test_log_mock.assert_not_called()
         create_testrun_attachment_mock.assert_not_called()
 
@@ -494,7 +510,7 @@ class TradefedLogsPluginTest(unittest.TestCase):
         results_url_mock.return_value = "http://foo.com"
         result_files = ResultFiles()
         result_files.test_results = ExtractedResult()
-        result_files.test_results.contents = "abc"
+        result_files.test_results.contents = BytesIO("abc".encode("utf-8"))
         result_files.test_results.length = 3
         get_from_artifactorial_mock.return_value = result_files
         testjob_mock = MagicMock()
@@ -507,22 +523,35 @@ class TradefedLogsPluginTest(unittest.TestCase):
         type(testjob_mock.backend).implementation_type = implementation_type_mock
         definition_mock = PropertyMock(return_value=JOB_DEFINITION)
         type(testjob_mock).definition = definition_mock
+        testjob_target = MagicMock()
+        project_settings_mock = PropertyMock(return_value='{}')
+        type(testjob_target).project_settings = project_settings_mock
+        type(testjob_mock).target = testjob_target
         self.plugin.postprocess_testjob(testjob_mock)
-        implementation_type_mock.assert_called_once()
-        definition_mock.assert_called()
-        results_url_mock.assert_called()
-        testjob_mock.testrun.metadata.__setitem__.assert_called()
-        testjob_mock.testrun.save.assert_called()
-        assign_test_log_mock.assert_called()
-        create_testrun_attachment_mock.assert_called()
+        implementation_type_mock.assert_called_once_with()
+        definition_mock.assert_called_with()
+        results_url_mock.assert_called_with()
+        testjob_mock.testrun.metadata.__setitem__.assert_called_with('tradefed_results_url_1234', 'http://foo.com')
+        testjob_mock.testrun.save.assert_called_with()
+        # uncomment when moving to python 3.6
+        #assign_test_log_mock.assert_called()
+        create_testrun_attachment_mock.assert_called_with(
+            testjob_mock.testrun,
+            'test_results.xml',
+            result_files.test_results,
+            'application/xml')
 
     def test_create_testrun_attachment(self):
         testrun_mock = Mock()
         name = "name"
         extracted_file_mock = Mock()
         type(extracted_file_mock).length = PropertyMock(return_value=2)
-        self.plugin._create_testrun_attachment(testrun_mock, name, extracted_file_mock)
-        testrun_mock.attachments.create.assert_called()
+        content_mock = Mock()
+        read_mock = Mock()
+        type(content_mock).read = read_mock
+        type(extracted_file_mock).contents = content_mock
+        self.plugin._create_testrun_attachment(testrun_mock, name, extracted_file_mock, "text/plain")
+        testrun_mock.attachments.create.assert_called_with(data=read_mock(), filename='name', length=2, mimetype='text/plain')
 
     @patch("tradefed.Tradefed._download_results")
     def test_get_from_artifactorial(self, download_results_mock):
@@ -538,9 +567,9 @@ class TradefedLogsPluginTest(unittest.TestCase):
         job_id_mock = PropertyMock(return_value=999)
         type(testjob_mock).job_id = job_id_mock
         result = self.plugin._get_from_artifactorial(testjob_mock, suite_name)
-        job_id_mock.assert_called()
-        testjob_mock.backend.get_implementation().proxy.results.get_testjob_suites_list_yaml.assert_called_once()
-        testjob_mock.backend.get_implementation().proxy.results.get_testsuite_results_yaml.assert_called()
+        job_id_mock.assert_called_with()
+        testjob_mock.backend.get_implementation().proxy.results.get_testjob_suites_list_yaml.assert_called_once_with(999)
+        testjob_mock.backend.get_implementation().proxy.results.get_testsuite_results_yaml.assert_called_with(999, '2_bar', 500, 0)
         self.assertIsNotNone(result)
 
     @patch("tradefed.Tradefed._download_results")
@@ -557,8 +586,8 @@ class TradefedLogsPluginTest(unittest.TestCase):
         job_id_mock = PropertyMock(return_value=999)
         type(testjob_mock).job_id = job_id_mock
         result = self.plugin._get_from_artifactorial(testjob_mock, suite_name)
-        job_id_mock.assert_called()
-        testjob_mock.backend.get_implementation().proxy.results.get_testjob_suites_list_yaml.assert_called_once()
+        job_id_mock.assert_called_with()
+        testjob_mock.backend.get_implementation().proxy.results.get_testjob_suites_list_yaml.assert_called_once_with(999)
         testjob_mock.backend.get_implementation().proxy.results.get_testsuite_results_yaml.assert_not_called()
         self.assertIsNone(result)
 
@@ -576,8 +605,8 @@ class TradefedLogsPluginTest(unittest.TestCase):
         job_id_mock = PropertyMock(return_value=999)
         type(testjob_mock).job_id = job_id_mock
         result = self.plugin._get_from_artifactorial(testjob_mock, suite_name)
-        job_id_mock.assert_called()
-        testjob_mock.backend.get_implementation().proxy.results.get_testjob_suites_list_yaml.assert_called_once()
+        job_id_mock.assert_called_with()
+        testjob_mock.backend.get_implementation().proxy.results.get_testjob_suites_list_yaml.assert_called_once_with(999)
         testjob_mock.backend.get_implementation().proxy.results.get_testsuite_results_yaml.assert_not_called()
         self.assertIsNone(result)
 
@@ -595,9 +624,9 @@ class TradefedLogsPluginTest(unittest.TestCase):
         job_id_mock = PropertyMock(return_value=999)
         type(testjob_mock).job_id = job_id_mock
         result = self.plugin._get_from_artifactorial(testjob_mock, suite_name)
-        job_id_mock.assert_called()
-        testjob_mock.backend.get_implementation().proxy.results.get_testjob_suites_list_yaml.assert_called_once()
-        testjob_mock.backend.get_implementation().proxy.results.get_testsuite_results_yaml.assert_called()
+        job_id_mock.assert_called_with()
+        testjob_mock.backend.get_implementation().proxy.results.get_testjob_suites_list_yaml.assert_called_once_with(999)
+        testjob_mock.backend.get_implementation().proxy.results.get_testsuite_results_yaml.assert_called_with(999, '2_bar', 500, 0)
         self.assertIsNone(result)
 
     @patch("tradefed.Tradefed._download_results")
@@ -614,9 +643,9 @@ class TradefedLogsPluginTest(unittest.TestCase):
         job_id_mock = PropertyMock(return_value=999)
         type(testjob_mock).job_id = job_id_mock
         result = self.plugin._get_from_artifactorial(testjob_mock, suite_name)
-        job_id_mock.assert_called()
-        testjob_mock.backend.get_implementation().proxy.results.get_testjob_suites_list_yaml.assert_called_once()
-        testjob_mock.backend.get_implementation().proxy.results.get_testsuite_results_yaml.assert_called()
+        job_id_mock.assert_called_with()
+        testjob_mock.backend.get_implementation().proxy.results.get_testjob_suites_list_yaml.assert_called_once_with(999)
+        testjob_mock.backend.get_implementation().proxy.results.get_testsuite_results_yaml.assert_called_with(999, '2_bar', 500, 0)
         self.assertIsNone(result)
 
     @patch("requests.get")
@@ -628,8 +657,8 @@ class TradefedLogsPluginTest(unittest.TestCase):
         type(requests_result_mock).content = content_mock
         get_mock.return_value = requests_result_mock
         results = self.plugin._download_results(RESULT_DICT)
-        status_code_mock.assert_called_once()
-        content_mock.assert_called_once()
+        status_code_mock.assert_called_once_with()
+        self.assertEqual(content_mock.call_count, 2)
         self.assertEqual(self.plugin.tradefed_results_url, RESULT_URL)
         self.assertIsNotNone(results.test_results)
         self.assertIsNotNone(results.tradefed_stdout)
@@ -646,8 +675,8 @@ class TradefedLogsPluginTest(unittest.TestCase):
         get_mock.return_value = requests_result_mock
         tarfile_mock.side_effect = EOFError()
         results = self.plugin._download_results(RESULT_DICT)
-        status_code_mock.assert_called_once()
-        content_mock.assert_called_once()
+        status_code_mock.assert_called_once_with()
+        self.assertEqual(content_mock.call_count, 2)
         self.assertEqual(self.plugin.tradefed_results_url, RESULT_URL)
         self.assertIsNone(results.test_results)
         self.assertIsNone(results.tradefed_stdout)
@@ -664,8 +693,8 @@ class TradefedLogsPluginTest(unittest.TestCase):
         get_mock.return_value = requests_result_mock
         tarfile_mock.side_effect = tarfile.ReadError()
         results = self.plugin._download_results(RESULT_DICT)
-        status_code_mock.assert_called_once()
-        content_mock.assert_called_once()
+        status_code_mock.assert_called_once_with()
+        self.assertEqual(content_mock.call_count, 2)
         self.assertEqual(self.plugin.tradefed_results_url, RESULT_URL)
         self.assertIsNone(results.test_results)
         self.assertIsNone(results.tradefed_stdout)
@@ -682,8 +711,8 @@ class TradefedLogsPluginTest(unittest.TestCase):
         get_mock.return_value = requests_result_mock
         tarfile_mock.side_effect = tarfile.HeaderError()
         results = self.plugin._download_results(RESULT_DICT)
-        status_code_mock.assert_called_once()
-        content_mock.assert_called_once()
+        status_code_mock.assert_called_once_with()
+        self.assertEqual(content_mock.call_count, 2)
         self.assertEqual(self.plugin.tradefed_results_url, RESULT_URL)
         self.assertIsNone(results.test_results)
         self.assertIsNone(results.tradefed_stdout)
@@ -698,8 +727,8 @@ class TradefedLogsPluginTest(unittest.TestCase):
         type(requests_result_mock).content = content_mock
         get_mock.return_value = requests_result_mock
         results = self.plugin._download_results(RESULT_DICT)
-        status_code_mock.assert_called_once()
-        content_mock.assert_called_once()
+        status_code_mock.assert_called_once_with()
+        self.assertEqual(content_mock.call_count, 2)
         self.assertEqual(self.plugin.tradefed_results_url, RESULT_URL)
         self.assertIsNone(results.test_results)
         self.assertIsNone(results.tradefed_stdout)
@@ -714,7 +743,7 @@ class TradefedLogsPluginTest(unittest.TestCase):
         type(requests_result_mock).content = content_mock
         get_mock.return_value = requests_result_mock
         results = self.plugin._download_results(RESULT_DICT)
-        status_code_mock.assert_called_once()
+        status_code_mock.assert_called_once_with()
         content_mock.assert_not_called()
         self.assertEqual(self.plugin.tradefed_results_url, RESULT_URL)
         self.assertIsNone(results.test_results)
@@ -729,7 +758,7 @@ class TradefedLogsPluginTest(unittest.TestCase):
         type(test_mock).name = name_mock
         self.plugin._assign_test_log(StringIO(XML_RESULTS), [test_mock])
         self.assertIn("java.lang.Error", test_mock.log)
-        test_mock.save.assert_called_once()
+        test_mock.save.assert_called_once_with()
 
     def test_assign_test_log_no_slash(self):
         test_mock = Mock()
@@ -748,7 +777,7 @@ class TradefedLogsPluginTest(unittest.TestCase):
         type(test_mock).name = name_mock
         self.plugin._assign_test_log(StringIO(XML_RESULTS), [test_mock])
         self.assertIn("java.lang.Error", test_mock.log)
-        test_mock.save.assert_called_once()
+        test_mock.save.assert_called_once_with()
 
     def test_assign_test_log_empty_list(self):
         buf = StringIO(XML_RESULTS)
