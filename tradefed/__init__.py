@@ -173,13 +173,17 @@ class Tradefed(BasePlugin):
                     ))
                     if decoded_test_result is True:
                         tr_status_dict[suite.slug].tests_pass += 1
+                        tr_status_dict[None].tests_pass += 1
                     elif decoded_test_result is False:
                         if test_issues:
                             tr_status_dict[suite.slug].tests_xfail += 1
+                            tr_status_dict[None].tests_xfail += 1
                         else:
                             tr_status_dict[suite.slug].tests_fail += 1
+                            tr_status_dict[None].tests_fail += 1
                     else:
                         tr_status_dict[suite.slug].tests_skip += 1
+                        tr_status_dict[None].tests_skip += 1
                 Test.objects.bulk_create(test_list)
         # retrieve all tests that should be associated with issues
         issue_tests = testrun.tests.filter(name__in=issues.keys())
