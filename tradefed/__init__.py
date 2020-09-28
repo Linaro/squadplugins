@@ -435,7 +435,8 @@ class Tradefed(BasePlugin):
                                             'params' in test_definition.keys() and \
                                             ('RESULTS_FORMAT' not in test_definition['params'] or ('RESULTS_FORMAT' in test_definition['params'] and test_definition['params']['RESULTS_FORMAT'] == 'aggregated')):
                                         # extract_cts_results also assigns the log
-                                        self._extract_cts_results(results.test_results.contents, testjob.testrun, test_definition['name'])
+                                        if results.test_results is not None:
+                                            self._extract_cts_results(results.test_results.contents, testjob.testrun, test_definition['name'])
                                     else:
                                         failed = testjob.testrun.tests.filter(result=False)
                                         if results.test_results is not None:
