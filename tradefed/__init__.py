@@ -24,6 +24,8 @@ class PaginatedObjectException(Exception):
 class ExtractedResult(object):
     contents = None
     length = None
+    name = None
+    mimetype = None
 
 
 class ResultFiles(object):
@@ -260,6 +262,8 @@ class Tradefed(BasePlugin):
                         results.tradefed_zipfile = ExtractedResult()
                         results.tradefed_zipfile.contents = r
                         results.tradefed_zipfile.length = len(result_tarball_request.content)
+                        results.tradefed_zipfile.name = result_tarball_request.url.rsplit("/", 1)[1]
+                        results.tradefed_zipfile.mimetype = result_tarball_request.headers.get("Content-Type")
                         logger.debug("Retrieved %s bytes" % r.getbuffer().nbytes)
                         t = tarfile.open(fileobj=r, mode='r:xz')
                         for member in t.getmembers():
@@ -384,6 +388,11 @@ class Tradefed(BasePlugin):
         return None
 
     def _create_testrun_attachment(self, testrun, name, extracted_file, mimetype):
+        extracted_file.contents.seek(0, os.SEEK_END)
+        logger.debug("creating attachment with name: %s" % name)
+        logger.debug("actual file size: %s" % extracted_file.contents.tell())
+        extracted_file.contents.seek(0)
+
         testrun.attachments.create(
             filename = name,
             data = extracted_file.contents.read(),
@@ -455,7 +464,11 @@ class Tradefed(BasePlugin):
                                     if results.tradefed_logcat is not None:
                                         self._create_testrun_attachment(testjob.testrun, "teadefed_logcat.txt", results.tradefed_logcat, "text/plain")
                                     if results.tradefed_zipfile is not None:
-                                        self._create_testrun_attachment(testjob.testrun, "tradefed.zip", results.tradefed_zipfile, "application/zip")
+                                        if results.tradefed_zipfile.mimetype is None:
+                                            results.tradefed_zipfile.mimetype = "application/x-tar"
+                                        if results.tradefed_zipfile.name is None:
+                                            results.tradefed_zipfile.name = "tradefed.tar.gz"
+                                        self._create_testrun_attachment(testjob.testrun, results.tradefed_zipfile.name, results.tradefed_zipfile, results.tradefed_zipfile.mimetype)
         logger.info("Finishing CTS/VTS plugin for test run: %s" % testjob)
 
 

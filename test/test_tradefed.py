@@ -655,6 +655,10 @@ class TradefedLogsPluginTest(unittest.TestCase):
         type(requests_result_mock).status_code = status_code_mock
         content_mock = PropertyMock(return_value=self.tarfile.read())
         type(requests_result_mock).content = content_mock
+        url_mock = PropertyMock(return_value="http://foo.bar.com/file.tar.xz")
+        type(requests_result_mock).url = url_mock
+        headers_mock = PropertyMock(return_value={"Content-Type": "application/x-tar"})
+        type(requests_result_mock).headers = headers_mock
         get_mock.return_value = requests_result_mock
         results = self.plugin._download_results(RESULT_DICT)
         status_code_mock.assert_called_once_with()
@@ -672,6 +676,10 @@ class TradefedLogsPluginTest(unittest.TestCase):
         type(requests_result_mock).status_code = status_code_mock
         content_mock = PropertyMock(return_value=self.tarfile.read())
         type(requests_result_mock).content = content_mock
+        url_mock = PropertyMock(return_value="http://foo.bar.com/file.tar.xz")
+        type(requests_result_mock).url = url_mock
+        headers_mock = PropertyMock(return_value={"Content-Type": "application/x-tar"})
+        type(requests_result_mock).headers = headers_mock
         get_mock.return_value = requests_result_mock
         tarfile_mock.side_effect = EOFError()
         results = self.plugin._download_results(RESULT_DICT)
@@ -690,6 +698,10 @@ class TradefedLogsPluginTest(unittest.TestCase):
         type(requests_result_mock).status_code = status_code_mock
         content_mock = PropertyMock(return_value=self.tarfile.read())
         type(requests_result_mock).content = content_mock
+        url_mock = PropertyMock(return_value="http://foo.bar.com/file.tar.xz")
+        type(requests_result_mock).url = url_mock
+        headers_mock = PropertyMock(return_value={"Content-Type": "application/x-tar"})
+        type(requests_result_mock).headers = headers_mock
         get_mock.return_value = requests_result_mock
         tarfile_mock.side_effect = tarfile.ReadError()
         results = self.plugin._download_results(RESULT_DICT)
@@ -708,6 +720,10 @@ class TradefedLogsPluginTest(unittest.TestCase):
         type(requests_result_mock).status_code = status_code_mock
         content_mock = PropertyMock(return_value=self.tarfile.read())
         type(requests_result_mock).content = content_mock
+        url_mock = PropertyMock(return_value="http://foo.bar.com/file.tar.xz")
+        type(requests_result_mock).url = url_mock
+        headers_mock = PropertyMock(return_value={"Content-Type": "application/x-tar"})
+        type(requests_result_mock).headers = headers_mock
         get_mock.return_value = requests_result_mock
         tarfile_mock.side_effect = tarfile.HeaderError()
         results = self.plugin._download_results(RESULT_DICT)
@@ -725,6 +741,10 @@ class TradefedLogsPluginTest(unittest.TestCase):
         type(requests_result_mock).status_code = status_code_mock
         content_mock = PropertyMock(return_value=bytes())
         type(requests_result_mock).content = content_mock
+        url_mock = PropertyMock(return_value="http://foo.bar.com/file.tar.xz")
+        type(requests_result_mock).url = url_mock
+        headers_mock = PropertyMock(return_value={"Content-Type": "application/x-tar"})
+        type(requests_result_mock).headers = headers_mock
         get_mock.return_value = requests_result_mock
         results = self.plugin._download_results(RESULT_DICT)
         status_code_mock.assert_called_once_with()
@@ -741,6 +761,10 @@ class TradefedLogsPluginTest(unittest.TestCase):
         type(requests_result_mock).status_code = status_code_mock
         content_mock = PropertyMock(return_value=bytes())
         type(requests_result_mock).content = content_mock
+        url_mock = PropertyMock(return_value="http://foo.bar.com/file.tar.xz")
+        type(requests_result_mock).url = url_mock
+        headers_mock = PropertyMock(return_value={"Content-Type": "application/x-tar"})
+        type(requests_result_mock).headers = headers_mock
         get_mock.return_value = requests_result_mock
         results = self.plugin._download_results(RESULT_DICT)
         status_code_mock.assert_called_once_with()
