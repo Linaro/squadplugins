@@ -5,16 +5,101 @@ import tarfile
 import xmlrpc
 import yaml
 import xml.etree.ElementTree as ET
+from celery import chord as celery_chord
 from io import BytesIO
 from django.conf import settings
+from django.db import transaction
 from squad.plugins import Plugin as BasePlugin
 from urllib.parse import urljoin
+from squad.celery import app as celery
 from squad.core.utils import join_name
-from squad.core.models import Suite, SuiteMetadata, Test, KnownIssue, Status
+from squad.core.models import Suite, SuiteMetadata, Test, KnownIssue, Status, TestRun, ProjectStatus
 from squad.core.tasks import get_suite
 
 
 logger = logging.getLogger()
+
+
+@celery.task
+def update_build_status(results_list, testrun_id):
+    testrun = TestRun.objects.get(pk=testrun_id)
+    ProjectStatus.create_or_update(testrun.build)
+
+
+@celery.task
+def create_testcase_tests(test_case_string, module_name, testrun_id, suite_id):
+    test_case = ET.fromstring(test_case_string)
+    testrun = TestRun.objects.get(pk=testrun_id)
+    suite = Suite.objects.get(pk=suite_id)
+    local_status = {
+        'tests_pass': 0,
+        'tests_xfail': 0,
+        'tests_fail': 0,
+        'tests_skip': 0
+    }
+    issues = {}
+    for issue in KnownIssue.active_by_environment(testrun.environment):
+        issues.setdefault(issue.test_name, [])
+        issues[issue.test_name].append(issue)
+
+    test_case_name = test_case.get("name")
+    atomic_test_suite_name = "{module_name}/{test_case_name}".format(module_name=module_name, test_case_name=test_case_name)
+    tests = test_case.findall('.//Test')
+    logger.debug("Extracting TestCase: {test_case_name}".format(test_case_name=test_case_name))
+    logger.debug("Adding {} testcases".format(len(tests)))
+    test_list = []
+    for atomic_test in tests:
+        atomic_test_result = atomic_test.get("result")
+        decoded_test_result = atomic_test_result == 'pass'
+        if atomic_test_result == 'skip' or atomic_test.get("skipped") == "true":
+            decoded_test_result = None
+        atomic_test_name = "{test_case_name}.{test_name}".format(test_case_name=test_case_name, test_name=atomic_test.get("name"))
+        atomic_test_log = ""
+        trace_node = atomic_test.find('.//StackTrace')
+        if trace_node is not None:
+            atomic_test_log = trace_node.text
+
+        metadata, _ = SuiteMetadata.objects.get_or_create(suite=atomic_test_suite_name, name=atomic_test_name, kind='test')
+        full_name = join_name(suite.slug, atomic_test_name)
+        test_issues = issues.get(full_name, [])
+        test_list.append(Test(
+            test_run=testrun,
+            suite=suite,
+            metadata=metadata,
+            name=atomic_test_name,
+            result=decoded_test_result,
+            log=atomic_test_log,
+            has_known_issues=bool(test_issues),
+        ))
+        if decoded_test_result is True:
+            local_status['tests_pass'] += 1
+        elif decoded_test_result is False:
+            if test_issues:
+                local_status['tests_xfail'] += 1
+            else:
+                local_status['tests_fail'] += 1
+        else:
+            local_status['tests_skip'] += 1
+    created_tests = Test.objects.bulk_create(test_list)
+    for test in created_tests:
+        if test.name in issues.keys():
+            test.known_issues.add(issues[test.name])
+
+    with transaction.atomic():
+        tr_status = testrun.status.select_for_update().get(suite=None)
+        tr_status.tests_pass += local_status['tests_pass']
+        tr_status.tests_xfail += local_status['tests_xfail']
+        tr_status.tests_fail += local_status['tests_fail']
+        tr_status.tests_skip += local_status['tests_skip']
+        tr_status.save()
+    suite_status, _ = Status.objects.get_or_create(test_run=testrun, suite=suite)
+    with transaction.atomic():
+        suite_status_for_update = Status.objects.select_for_update().get(pk=suite_status.pk)
+        suite_status_for_update.tests_pass += local_status['tests_pass']
+        suite_status_for_update.tests_xfail += local_status['tests_xfail']
+        suite_status_for_update.tests_fail += local_status['tests_fail']
+        suite_status_for_update.tests_skip += local_status['tests_skip']
+        suite_status_for_update.save()
 
 
 class PaginatedObjectException(Exception):
@@ -124,8 +209,7 @@ class Tradefed(BasePlugin):
         logger.debug("Tests: {}".format(len(test_elems)))
         elems = tradefed_tree.findall('Module')
         logger.debug("Modules: {}".format(len(elems)))
-        tr_status_dict = {}
-        tr_status_dict[None] = testrun.status.get(suite=None)
+        task_list = []
         for elem in elems:
             # Naming: Module Name + Test Case Name + Test Name
             if 'abi' in elem.attrib.keys():
@@ -142,59 +226,10 @@ class Tradefed(BasePlugin):
             suite_metadata, _ = SuiteMetadata.objects.get_or_create(suite=atomic_test_suite_name, kind='suite')
             suite, _ = Suite.objects.get_or_create(slug=atomic_test_suite_name, project=testrun.build.project, defaults={"metadata": suite_metadata})
             logger.debug("Adding status with suite: {suite_prefix}/{module_name}".format(suite_prefix=suite_prefix, module_name=module_name))
-            tr_status_dict[atomic_test_suite_name] = Status(test_run=testrun, suite=suite)
-            for test_case in test_cases:
-                test_case_name = test_case.get("name")
-                atomic_test_suite_name = "{module_name}/{test_case_name}".format(module_name=module_name, test_case_name=test_case_name)
-                tests = test_case.findall('.//Test')
-                logger.debug("Extracting TestCase: {test_case_name}".format(test_case_name=test_case_name))
-                logger.debug("Adding {} testcases".format(len(tests)))
-                test_list = []
-                for atomic_test in tests:
-                    atomic_test_result = atomic_test.get("result")
-                    decoded_test_result = atomic_test_result == 'pass'
-                    if atomic_test_result == 'skip':
-                        decoded_test_result = None
-                    atomic_test_name = "{test_case_name}.{test_name}".format(test_case_name=test_case_name, test_name=atomic_test.get("name"))
-                    atomic_test_log = ""
-                    trace_node = atomic_test.find('.//StackTrace')
-                    if trace_node is not None:
-                        atomic_test_log = trace_node.text
+            logger.debug("Creating subtasks for extracting results")
+            task_list = task_list + [create_testcase_tests.s(ET.tostring(test_case, encoding="utf-8"), module_name, testrun.pk, suite.pk) for test_case in test_cases]
 
-                    metadata, _ = SuiteMetadata.objects.get_or_create(suite=atomic_test_suite_name, name=atomic_test_name, kind='test')
-                    full_name = join_name(suite.slug, atomic_test_name)
-                    test_issues = issues.get(full_name, [])
-                    test_list.append(Test(
-                        test_run=testrun,
-                        suite=suite,
-                        metadata=metadata,
-                        name=atomic_test_name,
-                        result=decoded_test_result,
-                        log=atomic_test_log,
-                        has_known_issues=bool(test_issues),
-                    ))
-                    if decoded_test_result is True:
-                        tr_status_dict[suite.slug].tests_pass += 1
-                        tr_status_dict[None].tests_pass += 1
-                    elif decoded_test_result is False:
-                        if test_issues:
-                            tr_status_dict[suite.slug].tests_xfail += 1
-                            tr_status_dict[None].tests_xfail += 1
-                        else:
-                            tr_status_dict[suite.slug].tests_fail += 1
-                            tr_status_dict[None].tests_fail += 1
-                    else:
-                        tr_status_dict[suite.slug].tests_skip += 1
-                        tr_status_dict[None].tests_skip += 1
-                Test.objects.bulk_create(test_list)
-        # retrieve all tests that should be associated with issues
-        issue_tests = testrun.tests.filter(name__in=issues.keys())
-        # add issues to tests
-        for test in issue_tests:
-            test.known_issues.add(issues[test.name])
-        for tr_status_name, tr_status in tr_status_dict.items():
-            tr_status.save()
-
+        celery_chord(task_list)(update_build_status.s(testrun.pk))
 
     def _assign_test_log(self, buf, test_list):
         # assume buf is a file-like object
