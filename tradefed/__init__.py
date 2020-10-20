@@ -66,7 +66,6 @@ def create_testcase_tests(test_case_string, module_name, testrun_id, suite_id):
             test_run=testrun,
             suite=suite,
             metadata=metadata,
-            name=atomic_test_name,
             result=decoded_test_result,
             log=atomic_test_log,
             has_known_issues=bool(test_issues),
