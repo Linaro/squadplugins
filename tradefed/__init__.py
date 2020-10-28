@@ -8,6 +8,7 @@ import xml.etree.ElementTree as ET
 #from celery import chord as celery_chord
 from io import BytesIO
 from django.conf import settings
+from django.core.files.base import ContentFile
 from django.db import transaction
 from squad.plugins import Plugin as BasePlugin
 from urllib.parse import urljoin
@@ -428,12 +429,15 @@ class Tradefed(BasePlugin):
         logger.debug("actual file size: %s" % extracted_file.contents.tell())
         extracted_file.contents.seek(0)
 
-        testrun.attachments.create(
+        data = extracted_file.contents.read()
+        attachment = testrun.attachments.create(
             filename = name,
-            data = extracted_file.contents.read(),
+            data = data,
             length = extracted_file.length,
             mimetype = mimetype
         )
+
+        attachment.storage.save('attachment/%s/%s' % (attachment.id, name), ContentFile(data))
 
     def postprocess_testjob(self, testjob):
         # get related testjob
