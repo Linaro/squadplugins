@@ -27,7 +27,7 @@ def update_build_status(results_list, testrun_id):
 
 
 #@celery.task
-def create_testcase_tests(test_case_string, module_name, testrun_id, suite_id):
+def create_testcase_tests(test_case_string, atomic_test_suite_name, testrun_id, suite_id):
     test_case = ET.fromstring(test_case_string)
     testrun = TestRun.objects.get(pk=testrun_id)
     suite = Suite.objects.get(pk=suite_id)
@@ -43,7 +43,6 @@ def create_testcase_tests(test_case_string, module_name, testrun_id, suite_id):
         issues[issue.test_name].append(issue)
 
     test_case_name = test_case.get("name")
-    atomic_test_suite_name = "{module_name}/{test_case_name}".format(module_name=module_name, test_case_name=test_case_name)
     tests = test_case.findall('.//Test')
     logger.debug("Extracting TestCase: {test_case_name}".format(test_case_name=test_case_name))
     logger.debug("Adding {} testcases".format(len(tests)))
@@ -228,7 +227,7 @@ class Tradefed(BasePlugin):
             #logger.debug("Creating subtasks for extracting results")
             #task_list = task_list + [create_testcase_tests.s(ET.tostring(test_case, encoding="utf-8"), module_name, testrun.pk, suite.pk) for test_case in test_cases]
             for test_case in test_cases:
-                create_testcase_tests(ET.tostring(test_case, encoding="utf-8"), module_name, testrun.pk, suite.pk)
+                create_testcase_tests(ET.tostring(test_case, encoding="utf-8"), atomic_test_suite_name, testrun.pk, suite.pk)
 
         #celery_chord(task_list)(update_build_status.s(testrun.pk))
 
