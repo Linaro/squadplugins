@@ -547,11 +547,11 @@ class TradefedLogsPluginTest(unittest.TestCase):
         extracted_file_mock = Mock()
         type(extracted_file_mock).length = PropertyMock(return_value=2)
         content_mock = Mock()
-        read_mock = Mock()
-        type(content_mock).read = read_mock
+        #read_mock = Mock()
+        type(content_mock).read = lambda s: 'abc'
         type(extracted_file_mock).contents = content_mock
         self.plugin._create_testrun_attachment(testrun_mock, name, extracted_file_mock, "text/plain")
-        testrun_mock.attachments.create.assert_called_with(data=read_mock(), filename='name', length=2, mimetype='text/plain')
+        testrun_mock.attachments.create.assert_called_with(data='abc', filename='name', length=2, mimetype='text/plain')
 
     @patch("tradefed.Tradefed._download_results")
     def test_get_from_artifactorial(self, download_results_mock):
