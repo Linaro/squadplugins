@@ -5,30 +5,39 @@ import tarfile
 import xmlrpc
 import yaml
 import xml.etree.ElementTree as ET
-#from celery import chord as celery_chord
+from celery import chord as celery_chord
 from io import BytesIO
 from django.conf import settings
 from django.core.files.base import ContentFile
 from django.db import transaction
 from squad.plugins import Plugin as BasePlugin
 from urllib.parse import urljoin
-#from squad.celery import app as celery
+from squad.celery import app as celery
 from squad.core.utils import join_name
-from squad.core.models import Suite, SuiteMetadata, Test, KnownIssue, Status, TestRun, ProjectStatus
+from squad.core.models import Suite, SuiteMetadata, Test, KnownIssue, Status, TestRun, ProjectStatus, PluginScratch
 from squad.core.tasks import get_suite
 
 
 logger = logging.getLogger()
 
 
-#@celery.task
+@celery.task
 def update_build_status(results_list, testrun_id):
     testrun = TestRun.objects.get(pk=testrun_id)
     ProjectStatus.create_or_update(testrun.build)
 
 
-#@celery.task
-def create_testcase_tests(test_case_string, atomic_test_suite_name, testrun_id, suite_id):
+@celery.task
+def create_testcase_tests(test_case_string_storage_id, atomic_test_suite_name, testrun_id, suite_id):
+    test_case_string = None
+    scratch_object = None
+    try:
+        scratch_object = PluginScratch.objects.get(pk=test_case_string_storage_id)
+        test_case_string = scratch_object.storage
+    except PluginScratch.DoesNotExist:
+        logger.warning("PluginScratch with ID: %s doesn't exist" % test_case_string_storage_id)
+        return
+
     test_case = ET.fromstring(test_case_string)
     testrun = TestRun.objects.get(pk=testrun_id)
     suite = Suite.objects.get(pk=suite_id)
@@ -99,6 +108,9 @@ def create_testcase_tests(test_case_string, atomic_test_suite_name, testrun_id, 
         suite_status_for_update.tests_fail += local_status['tests_fail']
         suite_status_for_update.tests_skip += local_status['tests_skip']
         suite_status_for_update.save()
+    logger.info("Deleting PluginScratch with ID: %s" % scratch_object.pk)
+    scratch_object.delete()
+    return 0
 
 
 class PaginatedObjectException(Exception):
@@ -208,7 +220,7 @@ class Tradefed(BasePlugin):
         logger.debug("Tests: {}".format(len(test_elems)))
         elems = tradefed_tree.findall('Module')
         logger.debug("Modules: {}".format(len(elems)))
-        #task_list = []
+        task_list = []
         for elem in elems:
             # Naming: Module Name + Test Case Name + Test Name
             if 'abi' in elem.attrib.keys():
@@ -224,13 +236,18 @@ class Tradefed(BasePlugin):
             logger.debug("creating suite metadata: {}".format(atomic_test_suite_name))
             suite_metadata, _ = SuiteMetadata.objects.get_or_create(suite=atomic_test_suite_name, kind='suite')
             suite, _ = Suite.objects.get_or_create(slug=atomic_test_suite_name, project=testrun.build.project, defaults={"metadata": suite_metadata})
-            #logger.debug("Adding status with suite: {suite_prefix}/{module_name}".format(suite_prefix=suite_prefix, module_name=module_name))
-            #logger.debug("Creating subtasks for extracting results")
-            #task_list = task_list + [create_testcase_tests.s(ET.tostring(test_case, encoding="utf-8"), module_name, testrun.pk, suite.pk) for test_case in test_cases]
+            logger.debug("Adding status with suite: {suite_prefix}/{module_name}".format(suite_prefix=suite_prefix, module_name=module_name))
+            logger.debug("Creating subtasks for extracting results")
             for test_case in test_cases:
-                create_testcase_tests(ET.tostring(test_case, encoding="utf-8"), atomic_test_suite_name, testrun.pk, suite.pk)
+                plugin_scratch = PluginScratch.objects.create(
+                    build=testrun.build,
+                    storage=ET.tostring(test_case).decode('utf-8')
+                )
+                logger.debug("Created plugin scratch with ID: %s" % plugin_scratch.pk)
+                task = create_testcase_tests.s(plugin_scratch.pk, module_name, testrun.pk, suite.pk)
+                task_list.append(task)
 
-        #celery_chord(task_list)(update_build_status.s(testrun.pk))
+        celery_chord(task_list)(update_build_status.s(testrun.pk))
 
     def _assign_test_log(self, buf, test_list):
         # assume buf is a file-like object
