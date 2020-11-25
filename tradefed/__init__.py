@@ -21,7 +21,7 @@ from squad.core.tasks import get_suite
 logger = logging.getLogger()
 
 
-@celery.task
+@celery.task(queue='ci_fetch')
 def update_build_status(results_list, testrun_id):
     testrun = TestRun.objects.get(pk=testrun_id)
     ProjectStatus.create_or_update(testrun.build)
