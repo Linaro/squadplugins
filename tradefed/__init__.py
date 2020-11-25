@@ -449,7 +449,7 @@ class Tradefed(BasePlugin):
         data = extracted_file.contents.read()
         attachment = testrun.attachments.create(
             filename = name,
-            data = data,
+            old_data = data,
             length = extracted_file.length,
             mimetype = mimetype
         )
