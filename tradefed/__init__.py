@@ -481,8 +481,11 @@ class Tradefed(BasePlugin):
                             try:
                                 results = self._get_from_artifactorial(testjob, test_definition['name'])
                             except xmlrpc.client.ProtocolError as err:
-                                logger.error(err.errcode)
-                                logger.error(err.errmsg)
+                                error_cleaned = 'Failed to process CTS/VTS tests: %s - %s' % (err.errcode, testjob.backend.get_implementation().url_remove_token(str(errmsg)))
+                                logger.warning(error_cleaned)
+
+                                testjob.failure += error_cleaned 
+                                testjob.save()
 
                             logger.debug("Processing results")
                             if results is not None:
