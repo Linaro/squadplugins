@@ -244,7 +244,7 @@ class Tradefed(BasePlugin):
                     storage=ET.tostring(test_case).decode('utf-8')
                 )
                 logger.debug("Created plugin scratch with ID: %s" % plugin_scratch.pk)
-                task = create_testcase_tests.s(plugin_scratch.pk, module_name, testrun.pk, suite.pk)
+                task = create_testcase_tests.s(plugin_scratch.pk, atomic_test_suite_name, testrun.pk, suite.pk)
                 task_list.append(task)
 
         celery_chord(task_list)(update_build_status.s(testrun.pk))
