@@ -1,0 +1,29 @@
+#!/usr/bin/env python3
+
+import json
+import requests
+import subprocess
+import sys
+
+head = 'HEAD'
+if len(sys.argv) == 2:
+    head = sys.argv[1]
+
+commit = subprocess.check_output(['git', 'rev-parse', head]).decode('UTF-8').strip()
+
+res = requests.get('https://api.travis-ci.org/repos/Linaro/squadplugins/builds')
+builds = json.loads(res.content.decode('utf-8'))
+
+for build in builds:
+    if build['commit'] == commit:
+        if build['result'] == 0:
+            exit(0)
+        elif build['result'] is None:
+            print("E: %s is still being tested on CI: https://travis-ci.org/Linaro/squadplugins/builds/%s" % (head, build['id']))
+            exit(1)
+        else:
+            print("E: %s failed on CI: https://travis-ci.org/Linaro/squadplugins/builds/%s" % (head, build['id']))
+            exit(1)
+
+print("W: %s was not tested on CI yet." % head)
+exit(2)

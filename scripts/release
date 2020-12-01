@@ -1,0 +1,74 @@
+#!/bin/sh
+
+set -eu
+
+export SQUADPLUGINS_RELEASE=1
+
+v=$(python3 setup.py --version)
+if git rev-parse --verify --quiet "${v}" >/dev/null; then
+    echo "Version ${v} has already been released. Let's prepare a new one"
+    editor setup.py
+fi
+
+v=$(python3 setup.py --version)
+if git rev-parse --verify --quiet "${v}" >/dev/null; then
+    echo "Version ${v} has already been released. Aborting"
+    exit 1
+fi
+
+if ! grep -q "^# $v" CHANGELOG.md; then
+    echo "Let's now document the changes in CHANGELOG.md"
+    editor CHANGELOG.md
+fi
+
+if ! grep -q "^# $v" CHANGELOG.md; then
+    echo "E: Version $v is not documented in CHANGELOG.md. Please do that before releasing"
+    exit 1
+fi
+
+changed=$(git diff-index --name-only HEAD -- | (grep -v 'CHANGELOG.md\|setup.py' || true))
+if [ -n "$changed" ]; then
+    echo "E: uncommited changes found; cannot release like this"
+    echo "I: changed files:"
+    echo "$changed"
+    echo "I: CHANGELOG.md and setup.py are excused, they would be committed automatically"
+    exit 1
+fi
+
+if ! ./scripts/check-ci; then
+    printf "Are you sure you want to continue? [y/N]"
+    read -r confirm
+    if [ "$confirm" != 'y' ] && [ "$confirm" != 'Y' ]; then
+        exit 1
+    fi
+fi
+
+git commit --message "Release: ${v}" CHANGELOG.md setup.py || true
+
+# build
+rm -rf build/ dist/ *.egg-info/
+python3 setup.py sdist bdist_wheel
+
+# test
+tar=$(mktemp tar.XXXXXXXXX)
+git=$(mktemp git.XXXXXXXXX)
+trap cleanup INT TERM EXIT
+cleanup() {
+    rm -rf "$tar" "$git"
+}
+git ls-tree -r --name-only HEAD | grep -v '\.tar$' | sort > "$git"
+
+tar taf dist/squad-linaro-plugins-${v}.tar.gz | cut -d / -f 2- | grep -v '\(/$\|^$\|PKG-INFO\|egg-info\)' | sort > "$tar"
+diff -u "$tar" "$git"
+
+if [ "${UPLOAD:-yes}" = 'no' ]; then
+    echo "I: not uploading packages; they are left in dist/"
+    echo "I: you can run \`./scripts/upload $v\` to make the upload"
+    return
+fi
+
+./scripts/upload "$v"
+
+rm -rf build/
+rm -rf dist/
+rm -rf *.egg-info/

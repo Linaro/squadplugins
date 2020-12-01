@@ -1,2 +1,17 @@
 include COPYING
-include tradefed/squadtradefed.py
+include CHANGELOG.md
+include COPYING
+include COPYRIGHTS
+include LICENSES/AGPL-3.0-or-later.txt
+include MANIFEST.in
+include README.rst
+include setup.py
+include .gitignore
+include .reuse/dep5
+include .travis.yml
+
+include tradefed/__init__.py
+include ltp/__init__.py
+
+recursive-include test/ *.py *.tar.xz
+recursive-include scripts/ *

@@ -1,0 +1,15 @@
+#!/bin/sh
+
+set -eu
+
+v="$1"
+
+# sign & upload
+for f in dist/*; do
+    gpg --detach-sign --armor "$f"
+done
+twine upload dist/*
+
+git tag -s -m "$v release" "$v"
+git push
+git push --tags
