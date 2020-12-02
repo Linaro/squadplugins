@@ -78,6 +78,8 @@ def create_testcase_tests(test_case_string_storage_id, atomic_test_suite_name, t
             result=decoded_test_result,
             log=atomic_test_log,
             has_known_issues=bool(test_issues),
+            build=testrun.build,
+            environment=testrun.environment,
         ))
         if decoded_test_result is True:
             local_status['tests_pass'] += 1
