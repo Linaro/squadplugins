@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name='squad-linaro-plugins',
-    version='1.20.1',
+    version='1.21',
     author='Milosz Wasilewski',
     author_email='milosz.wasilewski@linaro.org',
     url='https://github.com/linaro/squadplugins',
@@ -21,5 +21,5 @@ setup(
     and LTP results (ltp).
     """,
     platforms='any',
-    install_requires=['squad[postgres]>=1.28', 'requests']
+    install_requires=['squad[postgres]>=1.30', 'requests']
 )
