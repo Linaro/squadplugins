@@ -1,3 +1,8 @@
+# 1.22
+
+This release adds attachments file contents to files only. It was saving
+to the database as well.
+
 # 1.21
 
 This release makes tradefed plugin add tests using build
