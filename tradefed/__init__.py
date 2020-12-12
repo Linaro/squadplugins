@@ -451,12 +451,11 @@ class Tradefed(BasePlugin):
         data = extracted_file.contents.read()
         attachment = testrun.attachments.create(
             filename = name,
-            old_data = data,
             length = extracted_file.length,
             mimetype = mimetype
         )
 
-        attachment.storage.save('attachment/%s/%s' % (attachment.id, name), ContentFile(data))
+        attachment.save_file(name, data)
 
     def postprocess_testjob(self, testjob):
         # get related testjob
