@@ -1,3 +1,7 @@
+# 1.23
+
+This release fixes an undefined errmessage in tradefed plugin.
+
 # 1.22
 
 This release adds attachments file contents to files only. It was saving
