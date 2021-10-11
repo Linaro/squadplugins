@@ -27,7 +27,7 @@ def update_build_status(results_list, testrun_id):
     ProjectStatus.create_or_update(testrun.build)
 
 
-@celery.task
+@celery.task(queue='ci_fetch')
 def create_testcase_tests(test_case_string_storage_id, atomic_test_suite_name, testrun_id, suite_id):
     test_case_string = None
     scratch_object = None
