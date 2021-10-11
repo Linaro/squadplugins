@@ -1,3 +1,8 @@
+# 1.24
+
+This release forces tradefed subtasks to use ci_fetch queue instead
+of it fall in other quick queues.
+
 # 1.23
 
 This release fixes an undefined errmessage in tradefed plugin.
