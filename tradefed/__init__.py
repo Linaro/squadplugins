@@ -465,70 +465,83 @@ class Tradefed(BasePlugin):
             logger.warning("Test job %s doesn't come from LAVA" % testjob)
             logger.debug(testjob.backend.implementation_type)
             return # this plugin only applies to LAVA
+
+        if not testjob.definition:
+            logger.warning("Test job %s doesn't have a definition" % testjob)
+            return
+
         # check if testjob is a tradefed job
-        if testjob.definition:
-            logger.debug("Loading test job definition")
-            job_definition = yaml.load(testjob.definition, Loader=yaml.CLoader)
-            # find all tests
-            if 'actions' in job_definition.keys():
-                for test_action in [action for action in job_definition['actions'] if'test' in action.keys()]:
-                    if 'definitions' not in test_action['test'].keys():
-                        continue
-                    for test_definition in test_action['test']['definitions']:
-                        logger.debug("Processing test %s" % test_definition['name'])
-                        if "tradefed.yaml" in test_definition['path']:  # is there any better heuristic?
-                            # download and parse results
-                            results = None
-                            try:
-                                results = self._get_from_artifactorial(testjob, test_definition['name'])
-                            except xmlrpc.client.ProtocolError as err:
-                                error_cleaned = 'Failed to process CTS/VTS tests: %s - %s' % (err.errcode, testjob.backend.get_implementation().url_remove_token(str(err.errmsg)))
-                                logger.warning(error_cleaned)
+        logger.debug("Loading test job definition")
+        job_definition = yaml.load(testjob.definition, Loader=yaml.CLoader)
+        # find all tests
+        if 'actions' not in job_definition.keys():
+            logger.warning("Test job %s definition doesn't have 'actions'" % testjob)
+            return
 
-                                testjob.failure += error_cleaned 
-                                testjob.save()
+        for test_action in [action for action in job_definition['actions'] if 'test' in action.keys()]:
+            if 'definitions' not in test_action['test'].keys():
+                continue
 
-                            logger.debug("Processing results")
-                            if results is not None:
-                                # add metadata key for taball download
-                                testjob.testrun.metadata["tradefed_results_url_%s" % testjob.job_id] = self.tradefed_results_url
-                                logger.debug("about to save testrun")
-                                testjob.testrun.save()
-                                logger.debug("testrun saved")
-                                # only failed tests have logs
-                                if testjob.testrun is not None:
-                                    ps = None
-                                    if testjob.target.project_settings is not None:
-                                        ps = yaml.safe_load(testjob.target.project_settings)
-                                    if ps and ps.get("PLUGINS_TRADEFED_EXTRACT_AGGREGATED", False) and \
-                                            'params' in test_definition.keys() and \
-                                            ('RESULTS_FORMAT' not in test_definition['params'] or ('RESULTS_FORMAT' in test_definition['params'] and test_definition['params']['RESULTS_FORMAT'] == 'aggregated')):
-                                        # extract_cts_results also assigns the log
-                                        if results.test_results is not None:
-                                            self._extract_cts_results(results.test_results.contents, testjob.testrun, test_definition['name'])
-                                    else:
-                                        failed = testjob.testrun.tests.filter(result=False)
-                                        if results.test_results is not None:
-                                            self._assign_test_log(results.test_results.contents, failed)
-                                    if results.test_results is not None:
-                                        self._convert_paths(testjob.testrun, results)
-                                        self._create_testrun_attachment(testjob.testrun, "test_results.xml", results.test_results, "application/xml")
-                                    if results.test_result_xslt is not None:
-                                        self._create_testrun_attachment(testjob.testrun, "compatibility_result.xsl", results.test_result_xslt, "application/xslt+xml")
-                                    if results.test_result_css is not None:
-                                        self._create_testrun_attachment(testjob.testrun, "compatibility_result.css", results.test_result_css, "text/css")
-                                    if results.test_result_image is not None:
-                                        self._create_testrun_attachment(testjob.testrun, "logo.png", results.test_result_image, "image/png")
-                                    if results.tradefed_stdout is not None:
-                                        self._create_testrun_attachment(testjob.testrun, "teadefed_stdout.txt", results.tradefed_stdout, "text/plain")
-                                    if results.tradefed_logcat is not None:
-                                        self._create_testrun_attachment(testjob.testrun, "teadefed_logcat.txt", results.tradefed_logcat, "text/plain")
-                                    if results.tradefed_zipfile is not None:
-                                        if results.tradefed_zipfile.mimetype is None:
-                                            results.tradefed_zipfile.mimetype = "application/x-tar"
-                                        if results.tradefed_zipfile.name is None:
-                                            results.tradefed_zipfile.name = "tradefed.tar.gz"
-                                        self._create_testrun_attachment(testjob.testrun, results.tradefed_zipfile.name, results.tradefed_zipfile, results.tradefed_zipfile.mimetype)
+            for test_definition in test_action['test']['definitions']:
+                logger.debug("Processing test %s" % test_definition['name'])
+                if "tradefed.yaml" not in test_definition['path']:  # is there any better heuristic?
+                    continue
+
+                # download and parse results
+                results = None
+                try:
+                    results = self._get_from_artifactorial(testjob, test_definition['name'])
+                except xmlrpc.client.ProtocolError as err:
+                    error_cleaned = 'Failed to process CTS/VTS tests: %s - %s' % (err.errcode, testjob.backend.get_implementation().url_remove_token(str(err.errmsg)))
+                    logger.warning(error_cleaned)
+
+                    testjob.failure += error_cleaned
+                    testjob.save()
+
+                if results is None:
+                    continue
+
+                logger.debug("Processing results")
+                # add metadata key for taball download
+                testjob.testrun.metadata["tradefed_results_url_%s" % testjob.job_id] = self.tradefed_results_url
+                logger.debug("about to save testrun")
+                testjob.testrun.save()
+                logger.debug("testrun saved")
+                # only failed tests have logs
+                if testjob.testrun is not None:
+                    ps = None
+                    if testjob.target.project_settings is not None:
+                        ps = yaml.safe_load(testjob.target.project_settings)
+                    if ps and ps.get("PLUGINS_TRADEFED_EXTRACT_AGGREGATED", False) and \
+                            'params' in test_definition.keys() and \
+                            ('RESULTS_FORMAT' not in test_definition['params'] or ('RESULTS_FORMAT' in test_definition['params'] and test_definition['params']['RESULTS_FORMAT'] == 'aggregated')):
+                        # extract_cts_results also assigns the log
+                        if results.test_results is not None:
+                            self._extract_cts_results(results.test_results.contents, testjob.testrun, test_definition['name'])
+                    else:
+                        failed = testjob.testrun.tests.filter(result=False)
+                        if results.test_results is not None:
+                            self._assign_test_log(results.test_results.contents, failed)
+                    if results.test_results is not None:
+                        self._convert_paths(testjob.testrun, results)
+                        self._create_testrun_attachment(testjob.testrun, "test_results.xml", results.test_results, "application/xml")
+                    if results.test_result_xslt is not None:
+                        self._create_testrun_attachment(testjob.testrun, "compatibility_result.xsl", results.test_result_xslt, "application/xslt+xml")
+                    if results.test_result_css is not None:
+                        self._create_testrun_attachment(testjob.testrun, "compatibility_result.css", results.test_result_css, "text/css")
+                    if results.test_result_image is not None:
+                        self._create_testrun_attachment(testjob.testrun, "logo.png", results.test_result_image, "image/png")
+                    if results.tradefed_stdout is not None:
+                        self._create_testrun_attachment(testjob.testrun, "teadefed_stdout.txt", results.tradefed_stdout, "text/plain")
+                    if results.tradefed_logcat is not None:
+                        self._create_testrun_attachment(testjob.testrun, "teadefed_logcat.txt", results.tradefed_logcat, "text/plain")
+                    if results.tradefed_zipfile is not None:
+                        if results.tradefed_zipfile.mimetype is None:
+                            results.tradefed_zipfile.mimetype = "application/x-tar"
+                        if results.tradefed_zipfile.name is None:
+                            results.tradefed_zipfile.name = "tradefed.tar.gz"
+                        self._create_testrun_attachment(testjob.testrun, results.tradefed_zipfile.name, results.tradefed_zipfile, results.tradefed_zipfile.mimetype)
+
         logger.info("Finishing CTS/VTS plugin for test run: %s" % testjob)
 
 
