@@ -6,16 +6,15 @@ import xmlrpc
 import yaml
 import xml.etree.ElementTree as ET
 from celery import chord as celery_chord
+from collections import defaultdict
 from io import BytesIO
 from django.conf import settings
-from django.core.files.base import ContentFile
-from django.db import transaction
 from squad.plugins import Plugin as BasePlugin
 from urllib.parse import urljoin
 from squad.celery import app as celery
-from squad.core.utils import join_name
+from squad.core.utils import join_name, split_list
 from squad.core.models import Suite, SuiteMetadata, Test, KnownIssue, Status, TestRun, ProjectStatus, PluginScratch
-from squad.core.tasks import get_suite
+from squad.core.tasks import RecordTestRunStatus
 
 
 logger = logging.getLogger()
@@ -24,92 +23,70 @@ logger = logging.getLogger()
 @celery.task(queue='ci_fetch')
 def update_build_status(results_list, testrun_id):
     testrun = TestRun.objects.get(pk=testrun_id)
+
+    # Comput stats all at once
+    Status.objects.filter(test_run=testrun).all().delete()
+    testrun.status_recorded = False
+    RecordTestRunStatus()(testrun)
+
     ProjectStatus.create_or_update(testrun.build)
 
 
 @celery.task(queue='ci_fetch')
 def create_testcase_tests(test_case_string_storage_id, atomic_test_suite_name, testrun_id, suite_id):
-    test_case_string = None
-    scratch_object = None
     try:
         scratch_object = PluginScratch.objects.get(pk=test_case_string_storage_id)
         test_case_string = scratch_object.storage
     except PluginScratch.DoesNotExist:
-        logger.warning("PluginScratch with ID: %s doesn't exist" % test_case_string_storage_id)
+        logger.warning(f"PluginScratch with ID: {test_case_string_storage_id} doesn't exist")
         return
 
-    test_case = ET.fromstring(test_case_string)
     testrun = TestRun.objects.get(pk=testrun_id)
-    suite = Suite.objects.get(pk=suite_id)
-    local_status = {
-        'tests_pass': 0,
-        'tests_xfail': 0,
-        'tests_fail': 0,
-        'tests_skip': 0
-    }
-    issues = {}
+    issues = defaultdict(list)
     for issue in KnownIssue.active_by_environment(testrun.environment):
-        issues.setdefault(issue.test_name, [])
         issues[issue.test_name].append(issue)
 
-    test_case_name = test_case.get("name")
-    tests = test_case.findall('.//Test')
-    logger.debug("Extracting TestCase: {test_case_name}".format(test_case_name=test_case_name))
-    logger.debug("Adding {} testcases".format(len(tests)))
     test_list = []
-    for atomic_test in tests:
-        atomic_test_result = atomic_test.get("result")
-        decoded_test_result = atomic_test_result == 'pass'
-        if atomic_test_result == 'skip' or atomic_test.get("skipped") == "true":
-            decoded_test_result = None
-        atomic_test_name = "{test_case_name}.{test_name}".format(test_case_name=test_case_name, test_name=atomic_test.get("name"))
-        atomic_test_log = ""
-        trace_node = atomic_test.find('.//StackTrace')
-        if trace_node is not None:
-            atomic_test_log = trace_node.text
+    test_case_set = ET.fromstring(test_case_string)
+    test_cases = test_case_set.findall('.//TestCase') or [test_case_set]
+    for test_case in test_cases:
+        test_case_name = test_case.get("name")
 
-        metadata, _ = SuiteMetadata.objects.get_or_create(suite=atomic_test_suite_name, name=atomic_test_name, kind='test')
-        full_name = join_name(suite.slug, atomic_test_name)
-        test_issues = issues.get(full_name, [])
-        test_list.append(Test(
-            test_run=testrun,
-            suite=suite,
-            metadata=metadata,
-            result=decoded_test_result,
-            log=atomic_test_log,
-            has_known_issues=bool(test_issues),
-            build=testrun.build,
-            environment=testrun.environment,
-        ))
-        if decoded_test_result is True:
-            local_status['tests_pass'] += 1
-        elif decoded_test_result is False:
-            if test_issues:
-                local_status['tests_xfail'] += 1
-            else:
-                local_status['tests_fail'] += 1
-        else:
-            local_status['tests_skip'] += 1
+        tests = test_case.findall('.//Test')
+        logger.debug(f"Extracting TestCase: {test_case_name} - {len(tests)} testcases")
+        for atomic_test in tests:
+
+            atomic_test_result = atomic_test.get("result")
+            decoded_test_result = atomic_test_result == 'pass'
+            if atomic_test_result == 'skip' or atomic_test.get("skipped") == "true":
+                decoded_test_result = None
+
+            atomic_test_name = f"{test_case_name}.{atomic_test.get('name')}"
+
+            atomic_test_log = ""
+            trace_node = atomic_test.find('.//StackTrace')
+            if trace_node is not None:
+                atomic_test_log = trace_node.text
+
+            metadata, _ = SuiteMetadata.objects.get_or_create(suite=atomic_test_suite_name, name=atomic_test_name, kind='test')
+            full_name = join_name(atomic_test_suite_name, atomic_test_name)
+            test_issues = issues.get(full_name, [])
+            test_list.append(Test(
+                test_run=testrun,
+                suite_id=suite_id,
+                metadata=metadata,
+                result=decoded_test_result,
+                log=atomic_test_log,
+                has_known_issues=bool(test_issues),
+                build=testrun.build,
+                environment=testrun.environment,
+            ))
+
     created_tests = Test.objects.bulk_create(test_list)
     for test in created_tests:
         if test.name in issues.keys():
             test.known_issues.add(issues[test.name])
 
-    with transaction.atomic():
-        tr_status = testrun.status.select_for_update().get(suite=None)
-        tr_status.tests_pass += local_status['tests_pass']
-        tr_status.tests_xfail += local_status['tests_xfail']
-        tr_status.tests_fail += local_status['tests_fail']
-        tr_status.tests_skip += local_status['tests_skip']
-        tr_status.save()
-    suite_status, _ = Status.objects.get_or_create(test_run=testrun, suite=suite)
-    with transaction.atomic():
-        suite_status_for_update = Status.objects.select_for_update().get(pk=suite_status.pk)
-        suite_status_for_update.tests_pass += local_status['tests_pass']
-        suite_status_for_update.tests_xfail += local_status['tests_xfail']
-        suite_status_for_update.tests_fail += local_status['tests_fail']
-        suite_status_for_update.tests_skip += local_status['tests_skip']
-        suite_status_for_update.save()
     logger.info("Deleting PluginScratch with ID: %s" % scratch_object.pk)
     scratch_object.delete()
     return 0
@@ -219,9 +196,11 @@ class Tradefed(BasePlugin):
             issues[issue.test_name].append(issue)
 
         test_elems = tradefed_tree.findall(".//Test")
-        logger.debug("Tests: {}".format(len(test_elems)))
+        logger.debug(f"Tests: {len(test_elems)}")
+
         elems = tradefed_tree.findall('Module')
-        logger.debug("Modules: {}".format(len(elems)))
+        logger.debug(f"Modules: {len(elems)}")
+
         task_list = []
         for elem in elems:
             # Naming: Module Name + Test Case Name + Test Name
@@ -229,22 +208,30 @@ class Tradefed(BasePlugin):
                 module_name = '.'.join([elem.attrib['abi'], elem.attrib['name']])
             else:
                 module_name = elem.attrib['name']
-            logger.debug("Extracting tests for module: {}".format(module_name))
+
+            logger.debug(f"Extracting tests for module: {module_name}")
             test_cases = elem.findall('.//TestCase')
-            suite_metadata_list = []
-            suite_list = []
+
             logger.debug("Extracting suite names")
-            atomic_test_suite_name = "{suite_prefix}/{module_name}".format(suite_prefix=suite_prefix, module_name=module_name)
-            logger.debug("creating suite metadata: {}".format(atomic_test_suite_name))
+            atomic_test_suite_name = f"{suite_prefix}/{module_name}"
+
+            logger.debug(f"Creating suite metadata: {atomic_test_suite_name}")
             suite_metadata, _ = SuiteMetadata.objects.get_or_create(suite=atomic_test_suite_name, kind='suite')
+
             suite, _ = Suite.objects.get_or_create(slug=atomic_test_suite_name, project=testrun.build.project, defaults={"metadata": suite_metadata})
-            logger.debug("Adding status with suite: {suite_prefix}/{module_name}".format(suite_prefix=suite_prefix, module_name=module_name))
+
             logger.debug("Creating subtasks for extracting results")
-            for test_case in test_cases:
+            for chunk in split_list(test_cases, chunk_size=10000):
+                xml_snippet = '<testcase_set>'
+                for test_case in chunk:
+                    xml_snippet += ET.tostring(test_case).decode('utf-8')
+                xml_snippet += '</testcase_set>'
+
                 plugin_scratch = PluginScratch.objects.create(
                     build=testrun.build,
-                    storage=ET.tostring(test_case).decode('utf-8')
+                    storage=xml_snippet,
                 )
+
                 logger.debug("Created plugin scratch with ID: %s" % plugin_scratch.pk)
                 task = create_testcase_tests.s(plugin_scratch.pk, atomic_test_suite_name, testrun.pk, suite.pk)
                 task_list.append(task)
@@ -385,11 +372,11 @@ class Tradefed(BasePlugin):
                 logger.debug("Something went wrong when calling results.get_testjob_suites_list_yaml from LAVA")
                 return None
         else:
-            suites_url = urljoin(testjob.backend.get_implementation().api_url_base, "jobs/{job_id}/suites/?name__contains={suite_name}".format(job_id=testjob.job_id, suite_name=suite_name))
+            suites_url = urljoin(testjob.backend.get_implementation().api_url_base, f"jobs/{testjob.job_id}/suites/?name__contains={suite_name}")
             try:
                 suites = self.__get_paginated_objects(suites_url, lava_implementation)
             except PaginatedObjectException:
-                logger.error("Unable to retrieve suites for job: {job_id}".format(job_id=testjob.job_id))
+                logger.error("Unable to retrieve suites for job: {testjob.job_id}")
                 return None
 
         for suite in suites:
@@ -465,70 +452,83 @@ class Tradefed(BasePlugin):
             logger.warning("Test job %s doesn't come from LAVA" % testjob)
             logger.debug(testjob.backend.implementation_type)
             return # this plugin only applies to LAVA
+
+        if not testjob.definition:
+            logger.warning("Test job %s doesn't have a definition" % testjob)
+            return
+
         # check if testjob is a tradefed job
-        if testjob.definition:
-            logger.debug("Loading test job definition")
-            job_definition = yaml.load(testjob.definition, Loader=yaml.CLoader)
-            # find all tests
-            if 'actions' in job_definition.keys():
-                for test_action in [action for action in job_definition['actions'] if'test' in action.keys()]:
-                    if 'definitions' not in test_action['test'].keys():
-                        continue
-                    for test_definition in test_action['test']['definitions']:
-                        logger.debug("Processing test %s" % test_definition['name'])
-                        if "tradefed.yaml" in test_definition['path']:  # is there any better heuristic?
-                            # download and parse results
-                            results = None
-                            try:
-                                results = self._get_from_artifactorial(testjob, test_definition['name'])
-                            except xmlrpc.client.ProtocolError as err:
-                                error_cleaned = 'Failed to process CTS/VTS tests: %s - %s' % (err.errcode, testjob.backend.get_implementation().url_remove_token(str(err.errmsg)))
-                                logger.warning(error_cleaned)
+        logger.debug("Loading test job definition")
+        job_definition = yaml.load(testjob.definition, Loader=yaml.CLoader)
+        # find all tests
+        if 'actions' not in job_definition.keys():
+            logger.warning("Test job %s definition doesn't have 'actions'" % testjob)
+            return
 
-                                testjob.failure += error_cleaned 
-                                testjob.save()
+        for test_action in [action for action in job_definition['actions'] if 'test' in action.keys()]:
+            if 'definitions' not in test_action['test'].keys():
+                continue
 
-                            logger.debug("Processing results")
-                            if results is not None:
-                                # add metadata key for taball download
-                                testjob.testrun.metadata["tradefed_results_url_%s" % testjob.job_id] = self.tradefed_results_url
-                                logger.debug("about to save testrun")
-                                testjob.testrun.save()
-                                logger.debug("testrun saved")
-                                # only failed tests have logs
-                                if testjob.testrun is not None:
-                                    ps = None
-                                    if testjob.target.project_settings is not None:
-                                        ps = yaml.safe_load(testjob.target.project_settings)
-                                    if ps and ps.get("PLUGINS_TRADEFED_EXTRACT_AGGREGATED", False) and \
-                                            'params' in test_definition.keys() and \
-                                            ('RESULTS_FORMAT' not in test_definition['params'] or ('RESULTS_FORMAT' in test_definition['params'] and test_definition['params']['RESULTS_FORMAT'] == 'aggregated')):
-                                        # extract_cts_results also assigns the log
-                                        if results.test_results is not None:
-                                            self._extract_cts_results(results.test_results.contents, testjob.testrun, test_definition['name'])
-                                    else:
-                                        failed = testjob.testrun.tests.filter(result=False)
-                                        if results.test_results is not None:
-                                            self._assign_test_log(results.test_results.contents, failed)
-                                    if results.test_results is not None:
-                                        self._convert_paths(testjob.testrun, results)
-                                        self._create_testrun_attachment(testjob.testrun, "test_results.xml", results.test_results, "application/xml")
-                                    if results.test_result_xslt is not None:
-                                        self._create_testrun_attachment(testjob.testrun, "compatibility_result.xsl", results.test_result_xslt, "application/xslt+xml")
-                                    if results.test_result_css is not None:
-                                        self._create_testrun_attachment(testjob.testrun, "compatibility_result.css", results.test_result_css, "text/css")
-                                    if results.test_result_image is not None:
-                                        self._create_testrun_attachment(testjob.testrun, "logo.png", results.test_result_image, "image/png")
-                                    if results.tradefed_stdout is not None:
-                                        self._create_testrun_attachment(testjob.testrun, "teadefed_stdout.txt", results.tradefed_stdout, "text/plain")
-                                    if results.tradefed_logcat is not None:
-                                        self._create_testrun_attachment(testjob.testrun, "teadefed_logcat.txt", results.tradefed_logcat, "text/plain")
-                                    if results.tradefed_zipfile is not None:
-                                        if results.tradefed_zipfile.mimetype is None:
-                                            results.tradefed_zipfile.mimetype = "application/x-tar"
-                                        if results.tradefed_zipfile.name is None:
-                                            results.tradefed_zipfile.name = "tradefed.tar.gz"
-                                        self._create_testrun_attachment(testjob.testrun, results.tradefed_zipfile.name, results.tradefed_zipfile, results.tradefed_zipfile.mimetype)
+            for test_definition in test_action['test']['definitions']:
+                logger.debug("Processing test %s" % test_definition['name'])
+                if "tradefed.yaml" not in test_definition['path']:  # is there any better heuristic?
+                    continue
+
+                # download and parse results
+                results = None
+                try:
+                    results = self._get_from_artifactorial(testjob, test_definition['name'])
+                except xmlrpc.client.ProtocolError as err:
+                    error_cleaned = 'Failed to process CTS/VTS tests: %s - %s' % (err.errcode, testjob.backend.get_implementation().url_remove_token(str(err.errmsg)))
+                    logger.warning(error_cleaned)
+
+                    testjob.failure += error_cleaned
+                    testjob.save()
+
+                if results is None:
+                    continue
+
+                logger.debug("Processing results")
+                # add metadata key for taball download
+                testjob.testrun.metadata["tradefed_results_url_%s" % testjob.job_id] = self.tradefed_results_url
+                logger.debug("about to save testrun")
+                testjob.testrun.save()
+                logger.debug("testrun saved")
+                # only failed tests have logs
+                if testjob.testrun is not None:
+                    ps = None
+                    if testjob.target.project_settings is not None:
+                        ps = yaml.safe_load(testjob.target.project_settings)
+                    if ps and ps.get("PLUGINS_TRADEFED_EXTRACT_AGGREGATED", False) and \
+                            'params' in test_definition.keys() and \
+                            ('RESULTS_FORMAT' not in test_definition['params'] or ('RESULTS_FORMAT' in test_definition['params'] and test_definition['params']['RESULTS_FORMAT'] == 'aggregated')):
+                        # extract_cts_results also assigns the log
+                        if results.test_results is not None:
+                            self._extract_cts_results(results.test_results.contents, testjob.testrun, test_definition['name'])
+                    else:
+                        failed = testjob.testrun.tests.filter(result=False)
+                        if results.test_results is not None:
+                            self._assign_test_log(results.test_results.contents, failed)
+                    if results.test_results is not None:
+                        self._convert_paths(testjob.testrun, results)
+                        self._create_testrun_attachment(testjob.testrun, "test_results.xml", results.test_results, "application/xml")
+                    if results.test_result_xslt is not None:
+                        self._create_testrun_attachment(testjob.testrun, "compatibility_result.xsl", results.test_result_xslt, "application/xslt+xml")
+                    if results.test_result_css is not None:
+                        self._create_testrun_attachment(testjob.testrun, "compatibility_result.css", results.test_result_css, "text/css")
+                    if results.test_result_image is not None:
+                        self._create_testrun_attachment(testjob.testrun, "logo.png", results.test_result_image, "image/png")
+                    if results.tradefed_stdout is not None:
+                        self._create_testrun_attachment(testjob.testrun, "teadefed_stdout.txt", results.tradefed_stdout, "text/plain")
+                    if results.tradefed_logcat is not None:
+                        self._create_testrun_attachment(testjob.testrun, "teadefed_logcat.txt", results.tradefed_logcat, "text/plain")
+                    if results.tradefed_zipfile is not None:
+                        if results.tradefed_zipfile.mimetype is None:
+                            results.tradefed_zipfile.mimetype = "application/x-tar"
+                        if results.tradefed_zipfile.name is None:
+                            results.tradefed_zipfile.name = "tradefed.tar.gz"
+                        self._create_testrun_attachment(testjob.testrun, results.tradefed_zipfile.name, results.tradefed_zipfile, results.tradefed_zipfile.mimetype)
+
         logger.info("Finishing CTS/VTS plugin for test run: %s" % testjob)
 
 
