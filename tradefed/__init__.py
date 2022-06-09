@@ -8,14 +8,12 @@ import xml.etree.ElementTree as ET
 from celery import chord as celery_chord
 from io import BytesIO
 from django.conf import settings
-from django.core.files.base import ContentFile
-from django.db import transaction
 from squad.plugins import Plugin as BasePlugin
 from urllib.parse import urljoin
 from squad.celery import app as celery
 from squad.core.utils import join_name
 from squad.core.models import Suite, SuiteMetadata, Test, KnownIssue, Status, TestRun, ProjectStatus, PluginScratch
-from squad.core.tasks import get_suite, RecordTestRunStatus
+from squad.core.tasks import RecordTestRunStatus
 
 
 logger = logging.getLogger()
@@ -208,8 +206,6 @@ class Tradefed(BasePlugin):
                 module_name = elem.attrib['name']
             logger.debug("Extracting tests for module: {}".format(module_name))
             test_cases = elem.findall('.//TestCase')
-            suite_metadata_list = []
-            suite_list = []
             logger.debug("Extracting suite names")
             atomic_test_suite_name = "{suite_prefix}/{module_name}".format(suite_prefix=suite_prefix, module_name=module_name)
             logger.debug("creating suite metadata: {}".format(atomic_test_suite_name))
