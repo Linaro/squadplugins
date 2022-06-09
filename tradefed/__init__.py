@@ -6,12 +6,13 @@ import xmlrpc
 import yaml
 import xml.etree.ElementTree as ET
 from celery import chord as celery_chord
+from collections import defaultdict
 from io import BytesIO
 from django.conf import settings
 from squad.plugins import Plugin as BasePlugin
 from urllib.parse import urljoin
 from squad.celery import app as celery
-from squad.core.utils import join_name
+from squad.core.utils import join_name, split_list
 from squad.core.models import Suite, SuiteMetadata, Test, KnownIssue, Status, TestRun, ProjectStatus, PluginScratch
 from squad.core.tasks import RecordTestRunStatus
 
@@ -33,52 +34,53 @@ def update_build_status(results_list, testrun_id):
 
 @celery.task(queue='ci_fetch')
 def create_testcase_tests(test_case_string_storage_id, atomic_test_suite_name, testrun_id, suite_id):
-    test_case_string = None
-    scratch_object = None
     try:
         scratch_object = PluginScratch.objects.get(pk=test_case_string_storage_id)
         test_case_string = scratch_object.storage
     except PluginScratch.DoesNotExist:
-        logger.warning("PluginScratch with ID: %s doesn't exist" % test_case_string_storage_id)
+        logger.warning(f"PluginScratch with ID: {test_case_string_storage_id} doesn't exist")
         return
 
-    test_case = ET.fromstring(test_case_string)
     testrun = TestRun.objects.get(pk=testrun_id)
-    suite = Suite.objects.get(pk=suite_id)
-    issues = {}
+    issues = defaultdict(list)
     for issue in KnownIssue.active_by_environment(testrun.environment):
-        issues.setdefault(issue.test_name, [])
         issues[issue.test_name].append(issue)
 
-    test_case_name = test_case.get("name")
-    tests = test_case.findall('.//Test')
-    logger.debug("Extracting TestCase: {test_case_name}".format(test_case_name=test_case_name))
-    logger.debug("Adding {} testcases".format(len(tests)))
     test_list = []
-    for atomic_test in tests:
-        atomic_test_result = atomic_test.get("result")
-        decoded_test_result = atomic_test_result == 'pass'
-        if atomic_test_result == 'skip' or atomic_test.get("skipped") == "true":
-            decoded_test_result = None
-        atomic_test_name = "{test_case_name}.{test_name}".format(test_case_name=test_case_name, test_name=atomic_test.get("name"))
-        atomic_test_log = ""
-        trace_node = atomic_test.find('.//StackTrace')
-        if trace_node is not None:
-            atomic_test_log = trace_node.text
+    test_case_set = ET.fromstring(test_case_string)
+    test_cases = test_case_set.findall('.//TestCase') or [test_case_set]
+    for test_case in test_cases:
+        test_case_name = test_case.get("name")
 
-        metadata, _ = SuiteMetadata.objects.get_or_create(suite=atomic_test_suite_name, name=atomic_test_name, kind='test')
-        full_name = join_name(suite.slug, atomic_test_name)
-        test_issues = issues.get(full_name, [])
-        test_list.append(Test(
-            test_run=testrun,
-            suite=suite,
-            metadata=metadata,
-            result=decoded_test_result,
-            log=atomic_test_log,
-            has_known_issues=bool(test_issues),
-            build=testrun.build,
-            environment=testrun.environment,
-        ))
+        tests = test_case.findall('.//Test')
+        logger.debug(f"Extracting TestCase: {test_case_name} - {len(tests)} testcases")
+        for atomic_test in tests:
+
+            atomic_test_result = atomic_test.get("result")
+            decoded_test_result = atomic_test_result == 'pass'
+            if atomic_test_result == 'skip' or atomic_test.get("skipped") == "true":
+                decoded_test_result = None
+
+            atomic_test_name = f"{test_case_name}.{atomic_test.get('name')}"
+
+            atomic_test_log = ""
+            trace_node = atomic_test.find('.//StackTrace')
+            if trace_node is not None:
+                atomic_test_log = trace_node.text
+
+            metadata, _ = SuiteMetadata.objects.get_or_create(suite=atomic_test_suite_name, name=atomic_test_name, kind='test')
+            full_name = join_name(atomic_test_suite_name, atomic_test_name)
+            test_issues = issues.get(full_name, [])
+            test_list.append(Test(
+                test_run=testrun,
+                suite_id=suite_id,
+                metadata=metadata,
+                result=decoded_test_result,
+                log=atomic_test_log,
+                has_known_issues=bool(test_issues),
+                build=testrun.build,
+                environment=testrun.environment,
+            ))
 
     created_tests = Test.objects.bulk_create(test_list)
     for test in created_tests:
@@ -218,13 +220,16 @@ class Tradefed(BasePlugin):
 
             suite, _ = Suite.objects.get_or_create(slug=atomic_test_suite_name, project=testrun.build.project, defaults={"metadata": suite_metadata})
 
-            logger.debug(f"Adding status with suite: {suite_prefix}/{module_name}")
-
             logger.debug("Creating subtasks for extracting results")
-            for test_case in test_cases:
+            for chunk in split_list(test_cases, chunk_size=10000):
+                xml_snippet = '<testcase_set>'
+                for test_case in chunk:
+                    xml_snippet += ET.tostring(test_case).decode('utf-8')
+                xml_snippet += '</testcase_set>'
+
                 plugin_scratch = PluginScratch.objects.create(
                     build=testrun.build,
-                    storage=ET.tostring(test_case).decode('utf-8')
+                    storage=xml_snippet,
                 )
 
                 logger.debug("Created plugin scratch with ID: %s" % plugin_scratch.pk)
