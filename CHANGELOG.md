@@ -1,3 +1,8 @@
+# 1.25
+
+This release improves speed when processing tradefed testjobs by creating
+batched of PluginScratch, instead of sending them one by one to the queue.
+
 # 1.24
 
 This release forces tradefed subtasks to use ci_fetch queue instead
