@@ -194,9 +194,11 @@ class Tradefed(BasePlugin):
             issues[issue.test_name].append(issue)
 
         test_elems = tradefed_tree.findall(".//Test")
-        logger.debug("Tests: {}".format(len(test_elems)))
+        logger.debug(f"Tests: {len(test_elems)}")
+
         elems = tradefed_tree.findall('Module')
-        logger.debug("Modules: {}".format(len(elems)))
+        logger.debug(f"Modules: {len(elems)}")
+
         task_list = []
         for elem in elems:
             # Naming: Module Name + Test Case Name + Test Name
@@ -204,20 +206,27 @@ class Tradefed(BasePlugin):
                 module_name = '.'.join([elem.attrib['abi'], elem.attrib['name']])
             else:
                 module_name = elem.attrib['name']
-            logger.debug("Extracting tests for module: {}".format(module_name))
+
+            logger.debug(f"Extracting tests for module: {module_name}")
             test_cases = elem.findall('.//TestCase')
+
             logger.debug("Extracting suite names")
-            atomic_test_suite_name = "{suite_prefix}/{module_name}".format(suite_prefix=suite_prefix, module_name=module_name)
-            logger.debug("creating suite metadata: {}".format(atomic_test_suite_name))
+            atomic_test_suite_name = f"{suite_prefix}/{module_name}"
+
+            logger.debug(f"Creating suite metadata: {atomic_test_suite_name}")
             suite_metadata, _ = SuiteMetadata.objects.get_or_create(suite=atomic_test_suite_name, kind='suite')
+
             suite, _ = Suite.objects.get_or_create(slug=atomic_test_suite_name, project=testrun.build.project, defaults={"metadata": suite_metadata})
-            logger.debug("Adding status with suite: {suite_prefix}/{module_name}".format(suite_prefix=suite_prefix, module_name=module_name))
+
+            logger.debug(f"Adding status with suite: {suite_prefix}/{module_name}")
+
             logger.debug("Creating subtasks for extracting results")
             for test_case in test_cases:
                 plugin_scratch = PluginScratch.objects.create(
                     build=testrun.build,
                     storage=ET.tostring(test_case).decode('utf-8')
                 )
+
                 logger.debug("Created plugin scratch with ID: %s" % plugin_scratch.pk)
                 task = create_testcase_tests.s(plugin_scratch.pk, atomic_test_suite_name, testrun.pk, suite.pk)
                 task_list.append(task)
@@ -358,11 +367,11 @@ class Tradefed(BasePlugin):
                 logger.debug("Something went wrong when calling results.get_testjob_suites_list_yaml from LAVA")
                 return None
         else:
-            suites_url = urljoin(testjob.backend.get_implementation().api_url_base, "jobs/{job_id}/suites/?name__contains={suite_name}".format(job_id=testjob.job_id, suite_name=suite_name))
+            suites_url = urljoin(testjob.backend.get_implementation().api_url_base, f"jobs/{testjob.job_id}/suites/?name__contains={suite_name}")
             try:
                 suites = self.__get_paginated_objects(suites_url, lava_implementation)
             except PaginatedObjectException:
-                logger.error("Unable to retrieve suites for job: {job_id}".format(job_id=testjob.job_id))
+                logger.error("Unable to retrieve suites for job: {testjob.job_id}")
                 return None
 
         for suite in suites:
