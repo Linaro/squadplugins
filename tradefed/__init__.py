@@ -15,7 +15,7 @@ from urllib.parse import urljoin
 from squad.celery import app as celery
 from squad.core.utils import join_name
 from squad.core.models import Suite, SuiteMetadata, Test, KnownIssue, Status, TestRun, ProjectStatus, PluginScratch
-from squad.core.tasks import get_suite
+from squad.core.tasks import get_suite, RecordTestRunStatus
 
 
 logger = logging.getLogger()
@@ -24,6 +24,12 @@ logger = logging.getLogger()
 @celery.task(queue='ci_fetch')
 def update_build_status(results_list, testrun_id):
     testrun = TestRun.objects.get(pk=testrun_id)
+
+    # Comput stats all at once
+    Status.objects.filter(test_run=testrun).all().delete()
+    testrun.status_recorded = False
+    RecordTestRunStatus()(testrun)
+
     ProjectStatus.create_or_update(testrun.build)
 
 
@@ -41,12 +47,6 @@ def create_testcase_tests(test_case_string_storage_id, atomic_test_suite_name, t
     test_case = ET.fromstring(test_case_string)
     testrun = TestRun.objects.get(pk=testrun_id)
     suite = Suite.objects.get(pk=suite_id)
-    local_status = {
-        'tests_pass': 0,
-        'tests_xfail': 0,
-        'tests_fail': 0,
-        'tests_skip': 0
-    }
     issues = {}
     for issue in KnownIssue.active_by_environment(testrun.environment):
         issues.setdefault(issue.test_name, [])
@@ -81,35 +81,12 @@ def create_testcase_tests(test_case_string_storage_id, atomic_test_suite_name, t
             build=testrun.build,
             environment=testrun.environment,
         ))
-        if decoded_test_result is True:
-            local_status['tests_pass'] += 1
-        elif decoded_test_result is False:
-            if test_issues:
-                local_status['tests_xfail'] += 1
-            else:
-                local_status['tests_fail'] += 1
-        else:
-            local_status['tests_skip'] += 1
+
     created_tests = Test.objects.bulk_create(test_list)
     for test in created_tests:
         if test.name in issues.keys():
             test.known_issues.add(issues[test.name])
 
-    with transaction.atomic():
-        tr_status = testrun.status.select_for_update().get(suite=None)
-        tr_status.tests_pass += local_status['tests_pass']
-        tr_status.tests_xfail += local_status['tests_xfail']
-        tr_status.tests_fail += local_status['tests_fail']
-        tr_status.tests_skip += local_status['tests_skip']
-        tr_status.save()
-    suite_status, _ = Status.objects.get_or_create(test_run=testrun, suite=suite)
-    with transaction.atomic():
-        suite_status_for_update = Status.objects.select_for_update().get(pk=suite_status.pk)
-        suite_status_for_update.tests_pass += local_status['tests_pass']
-        suite_status_for_update.tests_xfail += local_status['tests_xfail']
-        suite_status_for_update.tests_fail += local_status['tests_fail']
-        suite_status_for_update.tests_skip += local_status['tests_skip']
-        suite_status_for_update.save()
     logger.info("Deleting PluginScratch with ID: %s" % scratch_object.pk)
     scratch_object.delete()
     return 0
