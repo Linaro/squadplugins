@@ -1,3 +1,9 @@
+# 1.26
+
+This release fixes the excessive memory compsumption when parsing
+the CTS XML results file. It now iteractively parses it, avoiding
+allocating almost 1G of memory.
+
 # 1.25
 
 This release improves speed when processing tradefed testjobs by creating
