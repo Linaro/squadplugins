@@ -4,92 +4,19 @@ import requests
 import tarfile
 import xmlrpc
 import yaml
+import json
 import xml.etree.ElementTree as ET
 from celery import chord as celery_chord
-from collections import defaultdict
 from io import BytesIO
 from django.conf import settings
 from squad.plugins import Plugin as BasePlugin
 from urllib.parse import urljoin
-from squad.celery import app as celery
-from squad.core.utils import join_name, split_list
-from squad.core.models import Suite, SuiteMetadata, Test, KnownIssue, Status, TestRun, ProjectStatus, PluginScratch
-from squad.core.tasks import RecordTestRunStatus
+from squad.core.models import Suite, SuiteMetadata, PluginScratch
+
+from .tasks import create_testcase_tests, update_build_status
 
 
 logger = logging.getLogger()
-
-
-@celery.task(queue='ci_fetch')
-def update_build_status(results_list, testrun_id):
-    testrun = TestRun.objects.get(pk=testrun_id)
-
-    # Comput stats all at once
-    Status.objects.filter(test_run=testrun).all().delete()
-    testrun.status_recorded = False
-    RecordTestRunStatus()(testrun)
-
-    ProjectStatus.create_or_update(testrun.build)
-
-
-@celery.task(queue='ci_fetch')
-def create_testcase_tests(test_case_string_storage_id, atomic_test_suite_name, testrun_id, suite_id):
-    try:
-        scratch_object = PluginScratch.objects.get(pk=test_case_string_storage_id)
-        test_case_string = scratch_object.storage
-    except PluginScratch.DoesNotExist:
-        logger.warning(f"PluginScratch with ID: {test_case_string_storage_id} doesn't exist")
-        return
-
-    testrun = TestRun.objects.get(pk=testrun_id)
-    issues = defaultdict(list)
-    for issue in KnownIssue.active_by_environment(testrun.environment):
-        issues[issue.test_name].append(issue)
-
-    test_list = []
-    test_case_set = ET.fromstring(test_case_string)
-    test_cases = test_case_set.findall('.//TestCase') or [test_case_set]
-    for test_case in test_cases:
-        test_case_name = test_case.get("name")
-
-        tests = test_case.findall('.//Test')
-        logger.debug(f"Extracting TestCase: {test_case_name} - {len(tests)} testcases")
-        for atomic_test in tests:
-
-            atomic_test_result = atomic_test.get("result")
-            decoded_test_result = atomic_test_result == 'pass'
-            if atomic_test_result == 'skip' or atomic_test.get("skipped") == "true":
-                decoded_test_result = None
-
-            atomic_test_name = f"{test_case_name}.{atomic_test.get('name')}"
-
-            atomic_test_log = ""
-            trace_node = atomic_test.find('.//StackTrace')
-            if trace_node is not None:
-                atomic_test_log = trace_node.text
-
-            metadata, _ = SuiteMetadata.objects.get_or_create(suite=atomic_test_suite_name, name=atomic_test_name, kind='test')
-            full_name = join_name(atomic_test_suite_name, atomic_test_name)
-            test_issues = issues.get(full_name, [])
-            test_list.append(Test(
-                test_run=testrun,
-                suite_id=suite_id,
-                metadata=metadata,
-                result=decoded_test_result,
-                log=atomic_test_log,
-                has_known_issues=bool(test_issues),
-                build=testrun.build,
-                environment=testrun.environment,
-            ))
-
-    created_tests = Test.objects.bulk_create(test_list)
-    for test in created_tests:
-        if test.name in issues.keys():
-            test.known_issues.add(issues[test.name])
-
-    logger.info("Deleting PluginScratch with ID: %s" % scratch_object.pk)
-    scratch_object.delete()
-    return 0
 
 
 class PaginatedObjectException(Exception):
@@ -170,7 +97,6 @@ class Tradefed(BasePlugin):
             result_xslt_stringio.seek(0)
             results.test_result_xslt.contents = result_xslt_stringio
 
-
     def __parse_xml_results(self, buf):
         if buf is None:
             logger.warning("Results file doesn't exist")
@@ -185,56 +111,82 @@ class Tradefed(BasePlugin):
         buf.seek(0)
         return tradefed_tree
 
+    def _enqueue_testcases_chunk(self, testcases, testrun, suite):
+        plugin_scratch = PluginScratch.objects.create(
+            build=testrun.build,
+            storage=json.dumps(testcases),
+        )
+
+        logger.debug(f"Created plugin scratch with ID: {plugin_scratch}")
+        task = create_testcase_tests.s(plugin_scratch.id, suite.slug, testrun.id, suite.id)
+        del plugin_scratch
+        return task
+
     def _extract_cts_results(self, buf, testrun, suite_prefix):
-        tradefed_tree = self.__parse_xml_results(buf)
-        if tradefed_tree is None:
-            return
+        """
+            This function reads in buf and iteractively parses the XML file so that
+            it does not eat up lots of memory (+1G). The tags are grouped in chunks
+            of 1000 TestCase and then sent to the queue for sub-tasks to process them.
 
-        issues = {}
-        for issue in KnownIssue.active_by_environment(testrun.environment):
-            issues.setdefault(issue.test_name, [])
-            issues[issue.test_name].append(issue)
+            The PluginScratch serves as a helper to share data among the sub-tasks. Data
+            will be transformed to JSON when saved to plugin scratch.
+        """
 
-        test_elems = tradefed_tree.findall(".//Test")
-        logger.debug(f"Tests: {len(test_elems)}")
-
-        elems = tradefed_tree.findall('Module')
-        logger.debug(f"Modules: {len(elems)}")
-
+        chunk_size = 1000
+        module_name = ''
+        testcases = []
+        testcase = None
+        test = None
         task_list = []
-        for elem in elems:
-            # Naming: Module Name + Test Case Name + Test Name
-            if 'abi' in elem.attrib.keys():
-                module_name = '.'.join([elem.attrib['abi'], elem.attrib['name']])
-            else:
-                module_name = elem.attrib['name']
+        suite = None
+        suite_slug = ''
 
-            logger.debug(f"Extracting tests for module: {module_name}")
-            test_cases = elem.findall('.//TestCase')
+        try:
+            for event, element in ET.iterparse(buf, events=['start']):
+                if element.tag == 'Module':
+                    module_name = element.attrib['name']
+                    logger.debug(f"Module: {module_name}")
 
-            logger.debug("Extracting suite names")
-            atomic_test_suite_name = f"{suite_prefix}/{module_name}"
+                    if 'abi' in element.attrib.keys():
+                        module_name = element.attrib['abi'] + '.' + module_name
 
-            logger.debug(f"Creating suite metadata: {atomic_test_suite_name}")
-            suite_metadata, _ = SuiteMetadata.objects.get_or_create(suite=atomic_test_suite_name, kind='suite')
+                    suite_slug = f"{suite_prefix}/{module_name}"
+                    logger.debug(f"Creating suite metadata: {suite_slug}")
 
-            suite, _ = Suite.objects.get_or_create(slug=atomic_test_suite_name, project=testrun.build.project, defaults={"metadata": suite_metadata})
+                    metadata, _ = SuiteMetadata.objects.get_or_create(suite=suite_slug, kind='suite')
+                    suite, _ = Suite.objects.get_or_create(slug=suite_slug, project=testrun.build.project, defaults={"metadata": metadata})
 
-            logger.debug("Creating subtasks for extracting results")
-            for chunk in split_list(test_cases, chunk_size=10000):
-                xml_snippet = '<testcase_set>'
-                for test_case in chunk:
-                    xml_snippet += ET.tostring(test_case).decode('utf-8')
-                xml_snippet += '</testcase_set>'
+                if element.tag == 'TestCase':
+                    # Check if there's enough test cases to send to the queue
+                    if len(testcases) == chunk_size:
+                        logger.debug(f'Enqueueing {len(testcases)} TestCase tags')
+                        task = self._enqueue_testcases_chunk(testcases, testrun, suite)
+                        task_list.append(task)
+                        testcases = []
 
-                plugin_scratch = PluginScratch.objects.create(
-                    build=testrun.build,
-                    storage=xml_snippet,
-                )
+                    testcase = element.attrib
+                    testcase['tests'] = []
+                    testcase['suite'] = suite_slug
+                    testcases.append(testcase)
 
-                logger.debug("Created plugin scratch with ID: %s" % plugin_scratch.pk)
-                task = create_testcase_tests.s(plugin_scratch.pk, atomic_test_suite_name, testrun.pk, suite.pk)
-                task_list.append(task)
+                if element.tag == 'Test':
+                    test = element.attrib
+                    testcase['tests'].append(test)
+
+                if element.tag == 'StackTrace':
+                    test['log'] = element.text
+
+                # Release tag resources
+                element.clear()
+
+        except ET.ParseError as e:
+            logger.warning(e)
+            return None
+
+        # Process remaining test cases that didn't make to the last chunk
+        if len(testcases) > 0:
+            task = self._enqueue_testcases_chunk(testcases, testrun, suite)
+            task_list.append(task)
 
         celery_chord(task_list)(update_build_status.s(testrun.pk))
 
@@ -292,49 +244,66 @@ class Tradefed(BasePlugin):
 
     def _download_results(self, result_dict):
         results = ResultFiles()
-        if 'metadata' in result_dict:
-            if 'reference' in result_dict['metadata']:
-                try:
-                    logger.debug("Downloading CTS/VTS log from: %s" % result_dict['metadata']['reference'])
-                    self.tradefed_results_url = result_dict['metadata']['reference']
-                    result_tarball_request = requests.get(self.tradefed_results_url)
-                    if result_tarball_request.status_code == 200:
-                        result_tarball_request.raw.decode_content = True
-                        r = BytesIO(result_tarball_request.content)
-                        results.tradefed_zipfile = ExtractedResult()
-                        results.tradefed_zipfile.contents = r
-                        results.tradefed_zipfile.length = len(result_tarball_request.content)
-                        results.tradefed_zipfile.name = result_tarball_request.url.rsplit("/", 1)[1]
-                        results.tradefed_zipfile.mimetype = result_tarball_request.headers.get("Content-Type")
-                        logger.debug("Retrieved %s bytes" % r.getbuffer().nbytes)
-                        t = tarfile.open(fileobj=r, mode='r:xz')
-                        for member in t.getmembers():
-                            logger.debug("Available member: %s" % member.name)
-                            if "test_result.xml" in member.name:
-                                results.test_results = self._extract_member(t, member)
-                                logger.debug("test_results object is empty: %s" % (results.test_results is None))
-                            if "compatibility_result.xsl" in member.name:
-                                results.test_result_xslt = self._extract_member(t, member)
-                                logger.debug("test_result_xslt object is empty: %s" % (results.test_result_xslt is None))
-                            if "compatibility_result.css" in member.name:
-                                results.test_result_css = self._extract_member(t, member)
-                                logger.debug("test_result_css object is empty: %s" % (results.test_result_css is None))
-                            if "logo.png" in member.name:
-                                results.test_result_image = self._extract_member(t, member)
-                                logger.debug("test_result_image object is empty: %s" % (results.test_result_image is None))
-                            if "tradefed-stdout.txt" in member.name:
-                                results.tradefed_stdout = self._extract_member(t, member)
-                                logger.debug("tradefed_stdout object is empty: %s" % (results.tradefed_stdout is None))
-                            if "tradefed-logcat.txt" in member.name:
-                                results.tradefed_logcat = self._extract_member(t, member)
-                                logger.debug("tradefed_logcat object is empty: %s" % (results.tradefed_logcat is None))
-                except tarfile.TarError as e:
-                    logger.warning(e)
-                except EOFError as e:
-                    # this can happen when tarfile is corrupted
-                    logger.warning(e)
-                except requests.exceptions.Timeout as e:
-                    logger.warning(e)
+        try:
+            reference = result_dict['metadata']['reference']
+
+            logger.debug(f"Downloading CTS/VTS log from: {reference}")
+            self.tradefed_results_url = reference
+
+            result_tarball_request = requests.get(self.tradefed_results_url)
+            if result_tarball_request.status_code != 200:
+                return results
+
+
+            result_tarball_request.raw.decode_content = True
+            r = BytesIO(result_tarball_request.content)
+
+            results.tradefed_zipfile = ExtractedResult()
+            results.tradefed_zipfile.contents = r
+            results.tradefed_zipfile.length = len(result_tarball_request.content)
+            results.tradefed_zipfile.name = result_tarball_request.url.rsplit("/", 1)[1]
+            results.tradefed_zipfile.mimetype = result_tarball_request.headers.get("Content-Type")
+
+            logger.debug(f"Retrieved {results.tradefed_zipfile.length} bytes")
+
+            t = tarfile.open(fileobj=r, mode='r:xz')
+            for member in t.getmembers():
+
+                logger.debug(f"Available member: {member.name}")
+                if "test_result.xml" in member.name:
+                    results.test_results = self._extract_member(t, member)
+                    logger.debug("test_results object is empty: %s" % (results.test_results is None))
+
+                if "compatibility_result.xsl" in member.name:
+                    results.test_result_xslt = self._extract_member(t, member)
+                    logger.debug("test_result_xslt object is empty: %s" % (results.test_result_xslt is None))
+
+                if "compatibility_result.css" in member.name:
+                    results.test_result_css = self._extract_member(t, member)
+                    logger.debug("test_result_css object is empty: %s" % (results.test_result_css is None))
+
+                if "logo.png" in member.name:
+                    results.test_result_image = self._extract_member(t, member)
+                    logger.debug("test_result_image object is empty: %s" % (results.test_result_image is None))
+
+                if "tradefed-stdout.txt" in member.name:
+                    results.tradefed_stdout = self._extract_member(t, member)
+                    logger.debug("tradefed_stdout object is empty: %s" % (results.tradefed_stdout is None))
+
+                if "tradefed-logcat.txt" in member.name:
+                    results.tradefed_logcat = self._extract_member(t, member)
+                    logger.debug("tradefed_logcat object is empty: %s" % (results.tradefed_logcat is None))
+
+            logger.debug('Done extracting members')
+        except KeyError:
+            logger.warning("KeyError: result_dict['metadata']['reference']")
+        except tarfile.TarError as e:
+            logger.warning(e)
+        except EOFError as e:
+            # this can happen when tarfile is corrupted
+            logger.warning(e)
+        except requests.exceptions.Timeout as e:
+            logger.warning(e)
         return results
 
     def __get_paginated_objects(self, url, lava_implementation):
@@ -530,5 +499,3 @@ class Tradefed(BasePlugin):
                         self._create_testrun_attachment(testjob.testrun, results.tradefed_zipfile.name, results.tradefed_zipfile, results.tradefed_zipfile.mimetype)
 
         logger.info("Finishing CTS/VTS plugin for test run: %s" % testjob)
-
-
