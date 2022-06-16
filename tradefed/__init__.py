@@ -55,47 +55,25 @@ class Tradefed(BasePlugin):
                 return log_node
 
     def _convert_paths(self, testrun, results):
-        base_url = settings.BASE_URL
+        base_url = f"{settings.BASE_URL}/{testrun.build.project.group.slug}/{testrun.build.project.slug}/build/{testrun.build.version}/attachments/testrun/{testrun.id}"
         results_stringio = BytesIO()
         for line in results.test_results.contents:
-            line_to_write = line.decode().replace(
-                "compatibility_result.xsl",
-                "{base_url}/{group_slug}/{project_slug}/build/{build_version}/attachments/testrun/{testrun_id}/compatibility_result.xsl".format(
-                    base_url=base_url,
-                    group_slug=testrun.build.project.group.slug,
-                    project_slug=testrun.build.project.slug,
-                    build_version=testrun.build.version,
-                    testrun_id=testrun.id)
-            )
+            line_to_write = line.decode().replace("compatibility_result.xsl", f"{base_url}/compatibility_result.xsl")
             results_stringio.write(line_to_write.encode('utf-8'))
         results_stringio.seek(0, os.SEEK_END)
         results.test_results.length = results_stringio.tell()
         results_stringio.seek(0)
         results.test_results.contents = results_stringio
-        if results.test_result_xslt is not None:
-            result_xslt_stringio = BytesIO()
-            for line in results.test_result_xslt.contents:
-                result_xslt_stringio.write(
-                    line.decode().replace(
-                        "compatibility_result.css",
-                        "{base_url}/{group_slug}/{project_slug}/build/{build_version}/attachments/testrun/{testrun_id}/compatibility_result.css".format(
-                            base_url=base_url,
-                            group_slug=testrun.build.project.group.slug,
-                            project_slug=testrun.build.project.slug,
-                            build_version=testrun.build.version,
-                            testrun_id=testrun.id)
-                        ).replace("logo.png", "{base_url}/{group_slug}/{project_slug}/build/{build_version}/attachments/testrun/{testrun_id}/logo.png".format(
-                            base_url=base_url,
-                            group_slug=testrun.build.project.group.slug,
-                            project_slug=testrun.build.project.slug,
-                            build_version=testrun.build.version,
-                            testrun_id=testrun.id)
-                        ).encode('utf-8')
-                    )
-            result_xslt_stringio.seek(0, os.SEEK_END)
-            results.test_result_xslt.length = result_xslt_stringio.tell()
-            result_xslt_stringio.seek(0)
-            results.test_result_xslt.contents = result_xslt_stringio
+        if results.test_result_xslt is None:
+            return
+
+        result_xslt_stringio = BytesIO()
+        for line in results.test_result_xslt.contents:
+            result_xslt_stringio.write(line.decode().replace("compatibility_result.css", f"{base_url}/compatibility_result.css").replace("logo.png", f"{base_url}/logo.png").encode('utf-8'))
+        result_xslt_stringio.seek(0, os.SEEK_END)
+        results.test_result_xslt.length = result_xslt_stringio.tell()
+        result_xslt_stringio.seek(0)
+        results.test_result_xslt.contents = result_xslt_stringio
 
     def __parse_xml_results(self, buf):
         if buf is None:
@@ -254,7 +232,6 @@ class Tradefed(BasePlugin):
             if result_tarball_request.status_code != 200:
                 return results
 
-
             result_tarball_request.raw.decode_content = True
             r = BytesIO(result_tarball_request.content)
 
@@ -406,9 +383,9 @@ class Tradefed(BasePlugin):
 
         data = extracted_file.contents.read()
         attachment = testrun.attachments.create(
-            filename = name,
-            length = extracted_file.length,
-            mimetype = mimetype
+            filename=name,
+            length=extracted_file.length,
+            mimetype=mimetype
         )
 
         attachment.save_file(name, data)
@@ -420,7 +397,7 @@ class Tradefed(BasePlugin):
         if not testjob.backend.implementation_type == 'lava':
             logger.warning("Test job %s doesn't come from LAVA" % testjob)
             logger.debug(testjob.backend.implementation_type)
-            return # this plugin only applies to LAVA
+            return
 
         if not testjob.definition:
             logger.warning("Test job %s doesn't have a definition" % testjob)

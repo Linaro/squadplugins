@@ -1,15 +1,7 @@
-import django
 import os
-
-
-os.environ['DJANGO_SETTINGS_MODULE'] = 'squad.settings'
-django.setup()
-
-
 import logging
 import tarfile
 import unittest
-import tradefed
 from io import StringIO, BytesIO
 from unittest.mock import PropertyMock, MagicMock, Mock, patch
 from tradefed import Tradefed, ResultFiles, ExtractedResult
@@ -533,8 +525,7 @@ class TradefedLogsPluginTest(unittest.TestCase):
         results_url_mock.assert_called_with()
         testjob_mock.testrun.metadata.__setitem__.assert_called_with('tradefed_results_url_1234', 'http://foo.com')
         testjob_mock.testrun.save.assert_called_with()
-        # uncomment when moving to python 3.6
-        #assign_test_log_mock.assert_called()
+        assign_test_log_mock.assert_called()
         create_testrun_attachment_mock.assert_called_with(
             testjob_mock.testrun,
             'test_results.xml',
@@ -547,7 +538,6 @@ class TradefedLogsPluginTest(unittest.TestCase):
         extracted_file_mock = Mock()
         type(extracted_file_mock).length = PropertyMock(return_value=2)
         content_mock = Mock()
-        #read_mock = Mock()
         type(content_mock).read = lambda s: 'abc'
         type(extracted_file_mock).contents = content_mock
         self.plugin._create_testrun_attachment(testrun_mock, name, extracted_file_mock, "text/plain")

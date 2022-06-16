@@ -22,4 +22,3 @@ class LtpLogs(BasePlugin):
                 else:
                     test.log = test.log + "\r" + match
                 test.save()
-
