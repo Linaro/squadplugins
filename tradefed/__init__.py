@@ -122,6 +122,13 @@ class Tradefed(BasePlugin):
         try:
             for event, element in ET.iterparse(buf, events=['start']):
                 if element.tag == 'Module':
+
+                    # When changing modules, enqueue whatever testcases might be in buffer
+                    if len(testcases) > 0:
+                        task = self._enqueue_testcases_chunk(testcases, testrun, suite)
+                        task_list.append(task)
+                        testcases = []
+
                     module_name = element.attrib['name']
                     logger.debug(f"Module: {module_name}")
 
