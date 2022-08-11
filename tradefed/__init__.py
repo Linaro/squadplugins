@@ -11,7 +11,7 @@ from io import BytesIO
 from django.conf import settings
 from squad.plugins import Plugin as BasePlugin
 from urllib.parse import urljoin
-from squad.core.models import Suite, SuiteMetadata, PluginScratch
+from squad.core.models import Suite, SuiteMetadata, PluginScratch, KnownIssue
 
 from .tasks import create_testcase_tests, update_build_status
 
@@ -122,6 +122,13 @@ class Tradefed(BasePlugin):
         try:
             for event, element in ET.iterparse(buf, events=['start']):
                 if element.tag == 'Module':
+
+                    # When changing modules, enqueue whatever testcases might be in buffer
+                    if len(testcases) > 0:
+                        task = self._enqueue_testcases_chunk(testcases, testrun, suite)
+                        task_list.append(task)
+                        testcases = []
+
                     module_name = element.attrib['name']
                     logger.debug(f"Module: {module_name}")
 
@@ -150,6 +157,19 @@ class Tradefed(BasePlugin):
                 if element.tag == 'Test':
                     test = element.attrib
                     testcase['tests'].append(test)
+
+                    if test.get("result") == "ASSUMPTION_FAILURE":
+
+                        # ASSUMPTION_FAILURE will be added to the known issues list so they can show up
+                        # as xfail tests
+                        test_full_name = f"{suite_slug}/{testcase.get('name')}.{test.get('name')}"
+                        issue, _ = KnownIssue.objects.get_or_create(
+                            title=f'Tradefed/{test_full_name}',
+                            test_name=test_full_name,
+                        )
+
+                        issue.environments.add(testrun.environment)
+                        issue.save()
 
                 if element.tag == 'StackTrace':
                     test['log'] = element.text

@@ -48,10 +48,11 @@ def create_testcase_tests(pluginscratch_id, suite_slug, testrun_id, suite_id):
         logger.debug(f"Extracting TestCase: {test_case_name} - {len(tests)} testcases")
         for test in tests:
 
-            test_result = test.get("result")
-            test_result = test_result == 'pass'
-            if test_result == 'skip' or test.get("skipped") == "true":
-                test_result = None
+            test_result = None
+            if test.get("result") == "pass":
+                test_result = True
+            elif test.get("result") in ["fail", "ASSUMPTION_FAILURE"]:
+                test_result = False
 
             test_name = f"{test_case_name}.{test.get('name')}"
 

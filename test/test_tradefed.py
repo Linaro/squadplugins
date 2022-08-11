@@ -5,6 +5,7 @@ import unittest
 from io import StringIO, BytesIO
 from unittest.mock import PropertyMock, MagicMock, Mock, patch
 from tradefed import Tradefed, ResultFiles, ExtractedResult
+from collections import defaultdict
 
 
 SUITES = """
@@ -92,6 +93,45 @@ at org.junit.Assert.fail(Assert.java:88)
         <Failure message="java.lang.Error">
           <StackTrace>java.lang.Error:
 at org.junit.Assert.fail(Assert.java:88)
+</StackTrace>
+        </Failure>
+      </Test>
+    </TestCase>
+  </Module>
+  <Module name="module_bar" abi="arm64-v8a" runtime="34082" done="true" pass="1">
+    <TestCase name="TestCaseFoo">
+      <Test result="pass" name="test_bar1" />
+      <Test result="pass" name="test_bar2" />
+      <Test result="pass" name="test_bar3" />
+      <Test result="fail" name="test_bar4" >
+        <Failure message="java.lang.Error">
+          <StackTrace>java.lang.Error:
+at org.junit.Assert.fail(Assert.java:88)
+</StackTrace>
+        </Failure>
+      </Test>
+      <Test result="fail" name="xfirst_subname/second_subname.third_subname/test_bar5_64bit">
+        <Failure message="java.lang.Error">
+          <StackTrace>java.lang.Error:
+at org.junit.Assert.fail(Assert.java:88)
+</StackTrace>
+        </Failure>
+      </Test>
+      <Test result="ASSUMPTION_FAILURE" name="ztestSetAndGetBrightnessConfiguration">
+        <Failure message="org.junit.AssumptionViolatedException: got: &amp;lt;false&amp;gt;, expected: is &amp;lt;true&amp;gt;&#13;">
+          <StackTrace>org.junit.AssumptionViolatedException: got: false, expected: is true
+                  at org.junit.Assume.assumeThat(Assume.java:106)
+                  at org.junit.Assume.assumeTrue(Assume.java:50)
+                  at android.display.cts.BrightnessTest.testSetAndGetBrightnessConfiguration(BrightnessTest.java:398)
+                  at java.lang.reflect.Method.invoke(Native Method)
+                  at org.junit.runners.model.FrameworkMethod$1.runReflectiveCall(FrameworkMethod.java:59)
+                  at org.junit.internal.runners.model.ReflectiveCallable.run(ReflectiveCallable.java:12)
+                  at org.junit.runners.model.FrameworkMethod.invokeExplosively(FrameworkMethod.java:61)
+                  at org.junit.internal.runners.statements.InvokeMethod.evaluate(InvokeMethod.java:17)
+                  at org.junit.internal.runners.statements.FailOnTimeout$CallableStatement.call(FailOnTimeout.java:148)
+                  at org.junit.internal.runners.statements.FailOnTimeout$CallableStatement.call(FailOnTimeout.java:142)
+                  at java.util.concurrent.FutureTask.run(FutureTask.java:264)
+                  at java.lang.Thread.run(Thread.java:1012)
 </StackTrace>
         </Failure>
       </Test>
@@ -405,6 +445,7 @@ actions:
 
 logger = logging.getLogger()
 logger.setLevel(logging.ERROR)
+knownissue = None
 
 
 class TradefedLogsPluginTest(unittest.TestCase):
@@ -824,3 +865,130 @@ class TradefedLogsPluginTest(unittest.TestCase):
         type(test_mock).name = name_mock
         self.plugin._assign_test_log(StringIO(XML_RESULTS), [test_mock])
         test_mock.save.assert_not_called()
+
+    def test_extract_results_correctly(self):
+        testrun = Mock()
+        build = Mock()
+        type(build).project = PropertyMock(return_value="MyProject")
+        type(testrun).build = PropertyMock(return_value=build)
+        type(testrun).pk = PropertyMock(return_value=1)
+
+        def chord_mock_return_func(tasklist):
+            pass
+
+        def chord_mock_func(task):
+            return chord_mock_return_func
+
+        def update_s(testrun_pk):
+            return {}
+
+        def goc_mock(*args, **kwargs):
+            return kwargs, False
+
+        class KnownIssueMock:
+            def __init__(self, title, test_name):
+                self.environments = set()
+                self.title = title
+                self.test_name = test_name
+                self.saved = False
+
+            def save(self):
+                self.saved = True
+
+        def goc_knownissues(*args, **kwargs):
+            global knownissue
+            knownissue = KnownIssueMock(kwargs['title'], kwargs['test_name'])
+            return knownissue, False
+
+        tasks = defaultdict(list)
+        def enqueue_testcases(self, testcases, testrun, suite):
+            for testcase in testcases:
+                tasks[suite['slug']].append(testcase)
+
+        xmlbuf = StringIO(XML_RESULTS)
+        with patch("squad.core.models.SuiteMetadata.objects.get_or_create", goc_mock), \
+            patch("squad.core.models.Suite.objects.get_or_create", goc_mock), \
+            patch("squad.core.models.KnownIssue.objects.get_or_create", goc_knownissues), \
+            patch("tradefed.celery_chord", chord_mock_func), \
+            patch("tradefed.tasks.update_build_status.s", update_s), \
+            patch("tradefed.Tradefed._enqueue_testcases_chunk", enqueue_testcases):
+            self.plugin._extract_cts_results(xmlbuf, testrun, 'cts')
+
+        self.assertEqual(knownissue.title, 'Tradefed/cts/arm64-v8a.module_bar/TestCaseFoo.ztestSetAndGetBrightnessConfiguration')
+        self.assertEqual(knownissue.test_name, 'cts/arm64-v8a.module_bar/TestCaseFoo.ztestSetAndGetBrightnessConfiguration')
+        self.assertEqual(len(knownissue.environments), 1)
+        self.assertTrue(knownissue.saved)
+        self.assertEqual(tasks['cts/arm64-v8a.module_foo'], [
+            {
+                'name': 'TestCaseBar',
+                'tests': [
+                    {
+                        'result': 'pass',
+                        'name': 'test_bar1'
+                    },
+                    {
+                        'result': 'pass',
+                        'name': 'test_bar2'
+                    },
+                    {
+                        'result': 'pass',
+                        'name': 'test_bar3'
+                    },
+                    {
+                        'result': 'fail',
+                        'name': 'test_bar4',
+                        'log': 'java.lang.Error:\nat org.junit.Assert.fail(Assert.java:88)\n'
+                    },
+                    {
+                        'result': 'fail',
+                        'name': 'first_subname/second_subname.third_subname/test_bar5_64bit',
+                        'log': 'java.lang.Error:\nat org.junit.Assert.fail(Assert.java:88)\n'
+                    }
+                ],
+                'suite': 'cts/arm64-v8a.module_foo'
+            }
+        ])
+
+        self.assertEqual(tasks['cts/arm64-v8a.module_bar'][0]['name'], 'TestCaseFoo')
+        self.assertEqual(tasks['cts/arm64-v8a.module_bar'][0]['suite'], 'cts/arm64-v8a.module_bar')
+
+        tests = sorted(tasks['cts/arm64-v8a.module_bar'][0]['tests'], key=lambda d: d['name'])
+        self.assertEqual(tests[0], {
+            'result': 'pass',
+            'name': 'test_bar1'
+        })
+        self.assertEqual(tests[1], {
+            'result': 'pass',
+            'name': 'test_bar2'
+        })
+        self.assertEqual(tests[2], {
+            'result': 'pass',
+            'name': 'test_bar3'
+        })
+        self.assertEqual(tests[3], {
+            'result': 'fail',
+            'name': 'test_bar4',
+            'log': 'java.lang.Error:\nat org.junit.Assert.fail(Assert.java:88)\n'
+        })
+        self.assertEqual(tests[4], {
+            'result': 'fail',
+            'name': 'xfirst_subname/second_subname.third_subname/test_bar5_64bit',
+            'log': 'java.lang.Error:\nat org.junit.Assert.fail(Assert.java:88)\n'
+        })
+        self.assertEqual(tests[5], {
+            'result': 'ASSUMPTION_FAILURE',
+            'name': 'ztestSetAndGetBrightnessConfiguration',
+            'log': """org.junit.AssumptionViolatedException: got: false, expected: is true
+                  at org.junit.Assume.assumeThat(Assume.java:106)
+                  at org.junit.Assume.assumeTrue(Assume.java:50)
+                  at android.display.cts.BrightnessTest.testSetAndGetBrightnessConfiguration(BrightnessTest.java:398)
+                  at java.lang.reflect.Method.invoke(Native Method)
+                  at org.junit.runners.model.FrameworkMethod$1.runReflectiveCall(FrameworkMethod.java:59)
+                  at org.junit.internal.runners.model.ReflectiveCallable.run(ReflectiveCallable.java:12)
+                  at org.junit.runners.model.FrameworkMethod.invokeExplosively(FrameworkMethod.java:61)
+                  at org.junit.internal.runners.statements.InvokeMethod.evaluate(InvokeMethod.java:17)
+                  at org.junit.internal.runners.statements.FailOnTimeout$CallableStatement.call(FailOnTimeout.java:148)
+                  at org.junit.internal.runners.statements.FailOnTimeout$CallableStatement.call(FailOnTimeout.java:142)
+                  at java.util.concurrent.FutureTask.run(FutureTask.java:264)
+                  at java.lang.Thread.run(Thread.java:1012)\n"""
+        })
