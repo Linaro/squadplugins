@@ -1,3 +1,13 @@
+# 1.27
+
+This release fixes a bug when parsing tradefed results. In the latest
+release there was a significant change that started parsing the xml
+iteratively and this introduced a bug that would assing only a few
+suites to all tests, depending on the number of modules present.
+
+This release fixes that bug and also parses ASSUME_FAILURE tests
+as expected failure.
+
 # 1.26
 
 This release fixes the excessive memory compsumption when parsing
