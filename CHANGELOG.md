@@ -1,3 +1,9 @@
+# 1.28
+
+This release reduces the amount of queries to the database by
+saving a test only when its log lines have finished matching,
+thus saving lots of db time and performance.
+
 # 1.27
 
 This release fixes a bug when parsing tradefed results. In the latest
