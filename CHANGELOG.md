@@ -1,3 +1,8 @@
+# 1.28.1
+
+This release removed parallel processing log lines. Apparently
+it is not OK to have daemon processes to have children.
+
 # 1.28
 
 This release reduces the amount of queries to the database by
