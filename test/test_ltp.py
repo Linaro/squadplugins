@@ -25,7 +25,7 @@ class LtpLogsPluginTest(unittest.TestCase):
         test_1 = Mock()
         test_1.id = 1
         test_1.name = 'test_1'
-        test_1.log = 'the log 1\n'
+        test_1.log = 'the log 1'
         test_1.save.return_value = None
 
         test_2 = Mock()
@@ -64,7 +64,7 @@ class LtpLogsPluginTest(unittest.TestCase):
         test = Mock()
         test.id = 1
         test.name = "test[a-1]"
-        test.log = "the log\n"
+        test.log = "the log"
 
         testrun = Mock()
         testrun.log_file = TEST_LOG
