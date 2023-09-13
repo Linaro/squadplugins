@@ -57,6 +57,10 @@ def create_testcase_tests(pluginscratch_id, suite_slug, testrun_id, suite_id):
 
                 test_name = f"{test_case_name}.{test.get('name')}"
 
+                # TODO: increase SQUAD's max length for test name
+                #       currently it's at 256 characters
+                test_name = test_name[:256]
+
                 metadata, _ = SuiteMetadata.objects.get_or_create(suite=suite_slug, name=test_name, kind='test')
                 full_name = join_name(suite_slug, test_name)
                 test_issues = issues.get(full_name, [])
