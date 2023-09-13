@@ -40,40 +40,43 @@ def create_testcase_tests(pluginscratch_id, suite_slug, testrun_id, suite_id):
     for issue in KnownIssue.active_by_environment(testrun.environment):
         issues[issue.test_name].append(issue)
 
-    test_list = []
-    for test_case in test_cases:
-        test_case_name = test_case.get("name")
+    try:
+        test_list = []
+        for test_case in test_cases:
+            test_case_name = test_case.get("name")
 
-        tests = test_case['tests']
-        logger.debug(f"Extracting TestCase: {test_case_name} - {len(tests)} testcases")
-        for test in tests:
+            tests = test_case['tests']
+            logger.debug(f"Extracting TestCase: {test_case_name} - {len(tests)} testcases")
+            for test in tests:
 
-            test_result = None
-            if test.get("result") == "pass":
-                test_result = True
-            elif test.get("result") in ["fail", "ASSUMPTION_FAILURE"]:
-                test_result = False
+                test_result = None
+                if test.get("result") == "pass":
+                    test_result = True
+                elif test.get("result") in ["fail", "ASSUMPTION_FAILURE"]:
+                    test_result = False
 
-            test_name = f"{test_case_name}.{test.get('name')}"
+                test_name = f"{test_case_name}.{test.get('name')}"
 
-            metadata, _ = SuiteMetadata.objects.get_or_create(suite=suite_slug, name=test_name, kind='test')
-            full_name = join_name(suite_slug, test_name)
-            test_issues = issues.get(full_name, [])
-            test_list.append(Test(
-                test_run=testrun,
-                suite_id=suite_id,
-                metadata=metadata,
-                result=test_result,
-                log=test.get('log', ''),
-                has_known_issues=bool(test_issues),
-                build=testrun.build,
-                environment=testrun.environment,
-            ))
+                metadata, _ = SuiteMetadata.objects.get_or_create(suite=suite_slug, name=test_name, kind='test')
+                full_name = join_name(suite_slug, test_name)
+                test_issues = issues.get(full_name, [])
+                test_list.append(Test(
+                    test_run=testrun,
+                    suite_id=suite_id,
+                    metadata=metadata,
+                    result=test_result,
+                    log=test.get('log', ''),
+                    has_known_issues=bool(test_issues),
+                    build=testrun.build,
+                    environment=testrun.environment,
+                ))
 
-    created_tests = Test.objects.bulk_create(test_list)
-    for test in created_tests:
-        if test.name in issues.keys():
-            test.known_issues.add(issues[test.name])
+        created_tests = Test.objects.bulk_create(test_list)
+        for test in created_tests:
+            if test.name in issues.keys():
+                test.known_issues.add(issues[test.name])
+    except Exception as e:
+        logger.error(f"CTS/VTS error: {e}")
 
     logger.info(f"Deleting PluginScratch with ID: {scratch.pk}")
     scratch.delete()
