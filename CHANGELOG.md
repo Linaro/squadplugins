@@ -1,3 +1,9 @@
+# 1.28.2
+
+This release wraps test insertion with a try-except block to prevent
+unknown behaviors to affect SQUAD. The release also temporarily
+truncate test name to 256 characters.
+
 # 1.28.1
 
 This release removed parallel processing log lines. Apparently
