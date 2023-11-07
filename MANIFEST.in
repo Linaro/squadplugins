@@ -5,8 +5,11 @@ include COPYRIGHTS
 include LICENSES/AGPL-3.0-or-later.txt
 include MANIFEST.in
 include README.rst
+include requirements*.txt
 include setup.py
+include .github/workflows/*.yml
 include .gitignore
+include .coveragerc
 include .reuse/dep5
 include .travis.yml
 
@@ -15,3 +18,4 @@ include ltp/__init__.py
 
 recursive-include test/ *.py *.tar.xz
 recursive-include scripts/ *
+
