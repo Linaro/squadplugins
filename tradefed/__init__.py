@@ -7,16 +7,32 @@ import yaml
 import json
 import xml.etree.ElementTree as ET
 from celery import chord as celery_chord
-from io import BytesIO
 from django.conf import settings
+from io import BytesIO
+from requests.adapters import HTTPAdapter, Retry
+from squad.core.models import Suite, SuiteMetadata, PluginScratch, KnownIssue
 from squad.plugins import Plugin as BasePlugin
 from urllib.parse import urljoin
-from squad.core.models import Suite, SuiteMetadata, PluginScratch, KnownIssue
 
 from .tasks import create_testcase_tests, update_build_status
 
 
 logger = logging.getLogger()
+__session__ = None
+
+
+def get_session():
+    global __session__
+    if __session__ is None:
+        retry_strategy = Retry(
+            total=5,
+            backoff_factor=1,
+            status_forcelist=[429, 500, 502, 503, 504])
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        __session__ = requests.Session()
+        __session__.mount('http://', adapter)
+        __session__.mount('https://', adapter)
+    return __session__
 
 
 class PaginatedObjectException(Exception):
@@ -242,14 +258,16 @@ class Tradefed(BasePlugin):
 
     def _download_results(self, result_dict):
         results = ResultFiles()
+        session = get_session()
         try:
             reference = result_dict['metadata']['reference']
 
             logger.debug(f"Downloading CTS/VTS log from: {reference}")
             self.tradefed_results_url = reference
 
-            result_tarball_request = requests.get(self.tradefed_results_url)
+            result_tarball_request = session.get(self.tradefed_results_url)
             if result_tarball_request.status_code != 200:
+                logger.error(f"Failed to download tradefed file {self.tradefed_results_url}")
                 return results
 
             result_tarball_request.raw.decode_content = True
@@ -304,14 +322,15 @@ class Tradefed(BasePlugin):
         return results
 
     def __get_paginated_objects(self, url, lava_implementation):
+        session = get_session()
         # this method only applies to REST API
-        object_request = requests.get(url, headers=lava_implementation.authentication)
+        object_request = session.get(url, headers=lava_implementation.authentication)
         objects = []
         if object_request.status_code == 200:
             object_list = object_request.json()
             objects = object_list['results']
             while object_list['next']:
-                object_request = requests.get(object_list['next'], headers=lava_implementation.authentication)
+                object_request = session.get(object_list['next'], headers=lava_implementation.authentication)
                 if object_request.status_code == 200:
                     object_list = object_request.json()
                     objects = objects + object_list['results']
@@ -326,6 +345,7 @@ class Tradefed(BasePlugin):
         logger.debug("Retrieving result summary for job: %s" % testjob.job_id)
         suites = None
         lava_implementation = testjob.backend.get_implementation()
+        session = get_session()
         if lava_implementation.use_xml_rpc:
             suites = lava_implementation.proxy.results.get_testjob_suites_list_yaml(testjob.job_id)
             try:
@@ -384,7 +404,7 @@ class Tradefed(BasePlugin):
                             break
                 else:
                     test_attachment_url = urljoin(testjob.backend.get_implementation().api_url_base, "jobs/{job_id}/suites/{suite_id}/tests/?name=test-attachment".format(job_id=testjob.job_id, suite_id=suite['id']))
-                    test_attachment_request = requests.get(test_attachment_url, headers=lava_implementation.authentication)
+                    test_attachment_request = session.get(test_attachment_url, headers=lava_implementation.authentication)
                     if test_attachment_request.status_code == 200:
                         test_attachmet_results = test_attachment_request.json()
                         for test_result in test_attachmet_results['results']:

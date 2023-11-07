@@ -1,5 +1,6 @@
 import os
 import logging
+import requests_mock
 import tarfile
 import unittest
 from io import StringIO, BytesIO
@@ -679,131 +680,105 @@ class TradefedLogsPluginTest(unittest.TestCase):
         testjob_mock.backend.get_implementation().proxy.results.get_testsuite_results_yaml.assert_called_with(999, '2_bar', 500, 0)
         self.assertIsNone(result)
 
-    @patch("requests.get")
-    def test_download_results(self, get_mock):
-        requests_result_mock = Mock()
-        status_code_mock = PropertyMock(return_value=200)
-        type(requests_result_mock).status_code = status_code_mock
-        content_mock = PropertyMock(return_value=self.tarfile.read())
-        type(requests_result_mock).content = content_mock
-        url_mock = PropertyMock(return_value="http://foo.bar.com/file.tar.xz")
-        type(requests_result_mock).url = url_mock
-        headers_mock = PropertyMock(return_value={"Content-Type": "application/x-tar"})
-        type(requests_result_mock).headers = headers_mock
-        get_mock.return_value = requests_result_mock
-        results = self.plugin._download_results(RESULT_DICT)
-        status_code_mock.assert_called_once_with()
-        self.assertEqual(content_mock.call_count, 2)
-        self.assertEqual(self.plugin.tradefed_results_url, RESULT_URL)
-        self.assertIsNotNone(results.test_results)
-        self.assertIsNotNone(results.tradefed_stdout)
-        self.assertIsNotNone(results.tradefed_logcat)
+    def test_download_results(self):
+        with requests_mock.Mocker() as fake_request:
+            fake_request.get(
+                "http://foo.bar.com",
+                status_code=200,
+                content=self.tarfile.read(),
+                headers={"Content-Type": "application/x-tar"},
+            )
+
+            results = self.plugin._download_results(RESULT_DICT)
+            self.assertTrue(fake_request.called)
+            self.assertEqual(self.plugin.tradefed_results_url, RESULT_URL)
+            self.assertIsNotNone(results.test_results)
+            self.assertIsNotNone(results.tradefed_stdout)
+            self.assertIsNotNone(results.tradefed_logcat)
 
     @patch("tarfile.TarFile.getmembers")
-    @patch("requests.get")
-    def test_download_results_short_file(self, get_mock, tarfile_mock):
-        requests_result_mock = Mock()
-        status_code_mock = PropertyMock(return_value=200)
-        type(requests_result_mock).status_code = status_code_mock
-        content_mock = PropertyMock(return_value=self.tarfile.read())
-        type(requests_result_mock).content = content_mock
-        url_mock = PropertyMock(return_value="http://foo.bar.com/file.tar.xz")
-        type(requests_result_mock).url = url_mock
-        headers_mock = PropertyMock(return_value={"Content-Type": "application/x-tar"})
-        type(requests_result_mock).headers = headers_mock
-        get_mock.return_value = requests_result_mock
+    def test_download_results_short_file(self, tarfile_mock):
         tarfile_mock.side_effect = EOFError()
-        results = self.plugin._download_results(RESULT_DICT)
-        status_code_mock.assert_called_once_with()
-        self.assertEqual(content_mock.call_count, 2)
-        self.assertEqual(self.plugin.tradefed_results_url, RESULT_URL)
-        self.assertIsNone(results.test_results)
-        self.assertIsNone(results.tradefed_stdout)
-        self.assertIsNone(results.tradefed_logcat)
+
+        with requests_mock.Mocker() as fake_request:
+            fake_request.get(
+                "http://foo.bar.com",
+                status_code=200,
+                content=self.tarfile.read(),
+                headers={"Content-Type": "application/x-tar"},
+            )
+
+            results = self.plugin._download_results(RESULT_DICT)
+            self.assertEqual(self.plugin.tradefed_results_url, RESULT_URL)
+            self.assertIsNone(results.test_results)
+            self.assertIsNone(results.tradefed_stdout)
+            self.assertIsNone(results.tradefed_logcat)
 
     @patch("tarfile.TarFile.getmembers")
-    @patch("requests.get")
-    def test_download_results_corrupted_compression_readerror(self, get_mock, tarfile_mock):
-        requests_result_mock = Mock()
-        status_code_mock = PropertyMock(return_value=200)
-        type(requests_result_mock).status_code = status_code_mock
-        content_mock = PropertyMock(return_value=self.tarfile.read())
-        type(requests_result_mock).content = content_mock
-        url_mock = PropertyMock(return_value="http://foo.bar.com/file.tar.xz")
-        type(requests_result_mock).url = url_mock
-        headers_mock = PropertyMock(return_value={"Content-Type": "application/x-tar"})
-        type(requests_result_mock).headers = headers_mock
-        get_mock.return_value = requests_result_mock
+    def test_download_results_corrupted_compression_readerror(self, tarfile_mock):
         tarfile_mock.side_effect = tarfile.ReadError()
-        results = self.plugin._download_results(RESULT_DICT)
-        status_code_mock.assert_called_once_with()
-        self.assertEqual(content_mock.call_count, 2)
-        self.assertEqual(self.plugin.tradefed_results_url, RESULT_URL)
-        self.assertIsNone(results.test_results)
-        self.assertIsNone(results.tradefed_stdout)
-        self.assertIsNone(results.tradefed_logcat)
+
+        with requests_mock.Mocker() as fake_request:
+            fake_request.get(
+                "http://foo.bar.com",
+                status_code=200,
+                content=self.tarfile.read(),
+                headers={"Content-Type": "application/x-tar"},
+            )
+
+            results = self.plugin._download_results(RESULT_DICT)
+            self.assertEqual(self.plugin.tradefed_results_url, RESULT_URL)
+            self.assertIsNone(results.test_results)
+            self.assertIsNone(results.tradefed_stdout)
+            self.assertIsNone(results.tradefed_logcat)
 
     @patch("tarfile.TarFile.getmembers")
-    @patch("requests.get")
-    def test_download_results_corrupted_compression_headererror(self, get_mock, tarfile_mock):
-        requests_result_mock = Mock()
-        status_code_mock = PropertyMock(return_value=200)
-        type(requests_result_mock).status_code = status_code_mock
-        content_mock = PropertyMock(return_value=self.tarfile.read())
-        type(requests_result_mock).content = content_mock
-        url_mock = PropertyMock(return_value="http://foo.bar.com/file.tar.xz")
-        type(requests_result_mock).url = url_mock
-        headers_mock = PropertyMock(return_value={"Content-Type": "application/x-tar"})
-        type(requests_result_mock).headers = headers_mock
-        get_mock.return_value = requests_result_mock
+    def test_download_results_corrupted_compression_headererror(self, tarfile_mock):
         tarfile_mock.side_effect = tarfile.HeaderError()
-        results = self.plugin._download_results(RESULT_DICT)
-        status_code_mock.assert_called_once_with()
-        self.assertEqual(content_mock.call_count, 2)
-        self.assertEqual(self.plugin.tradefed_results_url, RESULT_URL)
-        self.assertIsNone(results.test_results)
-        self.assertIsNone(results.tradefed_stdout)
-        self.assertIsNone(results.tradefed_logcat)
 
-    @patch("requests.get")
-    def test_download_results_no_tarball(self, get_mock):
-        requests_result_mock = Mock()
-        status_code_mock = PropertyMock(return_value=200)
-        type(requests_result_mock).status_code = status_code_mock
-        content_mock = PropertyMock(return_value=bytes())
-        type(requests_result_mock).content = content_mock
-        url_mock = PropertyMock(return_value="http://foo.bar.com/file.tar.xz")
-        type(requests_result_mock).url = url_mock
-        headers_mock = PropertyMock(return_value={"Content-Type": "application/x-tar"})
-        type(requests_result_mock).headers = headers_mock
-        get_mock.return_value = requests_result_mock
-        results = self.plugin._download_results(RESULT_DICT)
-        status_code_mock.assert_called_once_with()
-        self.assertEqual(content_mock.call_count, 2)
-        self.assertEqual(self.plugin.tradefed_results_url, RESULT_URL)
-        self.assertIsNone(results.test_results)
-        self.assertIsNone(results.tradefed_stdout)
-        self.assertIsNone(results.tradefed_logcat)
+        with requests_mock.Mocker() as fake_request:
+            fake_request.get(
+                "http://foo.bar.com",
+                status_code=200,
+                content=self.tarfile.read(),
+                headers={"Content-Type": "application/x-tar"},
+            )
 
-    @patch("requests.get")
-    def test_download_results_expired_url(self, get_mock):
-        requests_result_mock = Mock()
-        status_code_mock = PropertyMock(return_value=404)
-        type(requests_result_mock).status_code = status_code_mock
-        content_mock = PropertyMock(return_value=bytes())
-        type(requests_result_mock).content = content_mock
-        url_mock = PropertyMock(return_value="http://foo.bar.com/file.tar.xz")
-        type(requests_result_mock).url = url_mock
-        headers_mock = PropertyMock(return_value={"Content-Type": "application/x-tar"})
-        type(requests_result_mock).headers = headers_mock
-        get_mock.return_value = requests_result_mock
-        results = self.plugin._download_results(RESULT_DICT)
-        status_code_mock.assert_called_once_with()
-        content_mock.assert_not_called()
-        self.assertEqual(self.plugin.tradefed_results_url, RESULT_URL)
-        self.assertIsNone(results.test_results)
-        self.assertIsNone(results.tradefed_stdout)
-        self.assertIsNone(results.tradefed_logcat)
+            results = self.plugin._download_results(RESULT_DICT)
+            self.assertEqual(self.plugin.tradefed_results_url, RESULT_URL)
+            self.assertIsNone(results.test_results)
+            self.assertIsNone(results.tradefed_stdout)
+            self.assertIsNone(results.tradefed_logcat)
+
+    def test_download_results_no_tarball(self):
+        with requests_mock.Mocker() as fake_request:
+            fake_request.get(
+                "http://foo.bar.com",
+                status_code=200,
+                content=bytes(),
+                headers={"Content-Type": "application/x-tar"},
+            )
+
+            results = self.plugin._download_results(RESULT_DICT)
+            self.assertEqual(self.plugin.tradefed_results_url, RESULT_URL)
+            self.assertIsNone(results.test_results)
+            self.assertIsNone(results.tradefed_stdout)
+            self.assertIsNone(results.tradefed_logcat)
+
+    def test_download_results_expired_url(self):
+        with requests_mock.Mocker() as fake_request:
+            fake_request.get(
+                "http://foo.bar.com",
+                status_code=404,
+                content=bytes(),
+                headers={"Content-Type": "application/x-tar"},
+            )
+
+            results = self.plugin._download_results(RESULT_DICT)
+            self.assertEqual(self.plugin.tradefed_results_url, RESULT_URL)
+            self.assertIsNone(results.test_results)
+            self.assertIsNone(results.tradefed_stdout)
+            self.assertIsNone(results.tradefed_logcat)
 
     def test_assign_test_log(self):
         test_mock = Mock()
