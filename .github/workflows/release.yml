@@ -28,4 +28,4 @@ jobs:
         VERSION: ${{ github.ref_name }}
       run: |
         ./scripts/build "$VERSION"
-        ./scripts/upload "$VERSION"
+        ./scripts/upload
