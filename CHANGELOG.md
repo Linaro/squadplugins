@@ -1,3 +1,7 @@
+# 1.28.3
+
+This release adds a retry strategy when requesting files.
+
 # 1.28.2
 
 This release wraps test insertion with a try-except block to prevent
