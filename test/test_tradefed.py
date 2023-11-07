@@ -901,17 +901,18 @@ class TradefedLogsPluginTest(unittest.TestCase):
             return knownissue, False
 
         tasks = defaultdict(list)
+
         def enqueue_testcases(self, testcases, testrun, suite):
             for testcase in testcases:
                 tasks[suite['slug']].append(testcase)
 
         xmlbuf = StringIO(XML_RESULTS)
         with patch("squad.core.models.SuiteMetadata.objects.get_or_create", goc_mock), \
-            patch("squad.core.models.Suite.objects.get_or_create", goc_mock), \
-            patch("squad.core.models.KnownIssue.objects.get_or_create", goc_knownissues), \
-            patch("tradefed.celery_chord", chord_mock_func), \
-            patch("tradefed.tasks.update_build_status.s", update_s), \
-            patch("tradefed.Tradefed._enqueue_testcases_chunk", enqueue_testcases):
+                patch("squad.core.models.Suite.objects.get_or_create", goc_mock), \
+                patch("squad.core.models.KnownIssue.objects.get_or_create", goc_knownissues), \
+                patch("tradefed.celery_chord", chord_mock_func), \
+                patch("tradefed.tasks.update_build_status.s", update_s), \
+                patch("tradefed.Tradefed._enqueue_testcases_chunk", enqueue_testcases):
             self.plugin._extract_cts_results(xmlbuf, testrun, 'cts')
 
         self.assertEqual(knownissue.title, 'Tradefed/cts/arm64-v8a.module_bar/TestCaseFoo.ztestSetAndGetBrightnessConfiguration')
