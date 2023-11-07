@@ -30,10 +30,10 @@ def create_testcase_tests(pluginscratch_id, suite_slug, testrun_id, suite_id):
         scratch = PluginScratch.objects.get(pk=pluginscratch_id)
         test_cases = json.loads(scratch.storage)
     except PluginScratch.DoesNotExist:
-        logger.warning(f"PluginScratch with ID: {pluginscratch_id} doesn't exist")
+        logger.error(f"PluginScratch with ID: {pluginscratch_id} doesn't exist")
         return
     except ValueError as e:
-        logger.warning(f"Failed to load json for PluginScratch ({pluginscratch_id}): {e}")
+        logger.error(f"Failed to load json for PluginScratch ({pluginscratch_id}): {e}")
 
     testrun = TestRun.objects.get(pk=testrun_id)
     issues = defaultdict(list)

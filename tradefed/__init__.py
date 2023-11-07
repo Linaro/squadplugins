@@ -293,14 +293,14 @@ class Tradefed(BasePlugin):
 
             logger.debug('Done extracting members')
         except KeyError:
-            logger.warning("KeyError: result_dict['metadata']['reference']")
+            logger.error("KeyError: result_dict['metadata']['reference']")
         except tarfile.TarError as e:
-            logger.warning(e)
+            logger.error(e)
         except EOFError as e:
             # this can happen when tarfile is corrupted
-            logger.warning(e)
+            logger.error(e)
         except requests.exceptions.Timeout as e:
-            logger.warning(e)
+            logger.error(e)
         return results
 
     def __get_paginated_objects(self, url, lava_implementation):
@@ -331,11 +331,11 @@ class Tradefed(BasePlugin):
             try:
                 suites = yaml.load(suites, Loader=yaml.CLoader)
             except yaml.parser.ParserError as e:
-                logger.warning(e)
+                logger.error(f"Failed to parse suited for job {testjob.id}: {e}")
                 return None
 
             if not suites:
-                logger.debug("Something went wrong when calling results.get_testjob_suites_list_yaml from LAVA")
+                logger.error("Something went wrong when calling results.get_testjob_suites_list_yaml from LAVA for job {testjob.id}")
                 return None
         else:
             suites_url = urljoin(testjob.backend.get_implementation().api_url_base, f"jobs/{testjob.job_id}/suites/?name__contains={suite_name}")
@@ -359,11 +359,11 @@ class Tradefed(BasePlugin):
                     try:
                         yaml_results = yaml.load(results, Loader=yaml.CLoader)
                     except yaml.scanner.ScannerError as e:
-                        logger.warning(e)
+                        logger.error(f"Failed to load {suite_name} results for job {testjob.id}: {e}")
                         return None
 
                     if not yaml_results:
-                        logger.debug("Something went wrong with results.get_testsuite_results_yaml from LAVA")
+                        logger.error("Something went wrong with results.get_testsuite_results_yaml from LAVA for job {testjob.id}")
                         return None
 
                     while True:
@@ -415,7 +415,7 @@ class Tradefed(BasePlugin):
         logger.info("Starting CTS/VTS plugin for test job: %s" % testjob)
         logging.debug("Processing test job: %s" % testjob)
         if not testjob.backend.implementation_type == 'lava':
-            logger.warning("Test job %s doesn't come from LAVA" % testjob)
+            logger.error(f"Test job {testjob.id} doesn't come from LAVA")
             logger.debug(testjob.backend.implementation_type)
             return
 
@@ -446,7 +446,7 @@ class Tradefed(BasePlugin):
                     results = self._get_from_artifactorial(testjob, test_definition['name'])
                 except xmlrpc.client.ProtocolError as err:
                     error_cleaned = 'Failed to process CTS/VTS tests: %s - %s' % (err.errcode, testjob.backend.get_implementation().url_remove_token(str(err.errmsg)))
-                    logger.warning(error_cleaned)
+                    logger.error(error_cleaned)
 
                     testjob.failure += error_cleaned
                     testjob.save()
