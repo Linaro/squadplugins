@@ -1,5 +1,5 @@
-#!/bin/sh
+#!/bin/bash
 
 set -eu
 
-exec python3 -m pytest --cov --cov-fail-under=70
+python3 -m pytest --cov --cov-fail-under=70
