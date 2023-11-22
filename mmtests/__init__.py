@@ -28,13 +28,13 @@ class Mmtests(BasePlugin):
 
         response = tuxsuite.fetch_url(attachments_url)
         if response.status_code != 200:
-            logger.error(f"Failed to run Mmtests plugin: bad http response {response.status_code} when fetching {attachments_url}")
+            logger.debug(f"Failed to run Mmtests plugin: bad http response {response.status_code} when fetching {attachments_url}")
             return
 
         try:
             file_urls = [f['Url'] for f in response.json()['files']]
         except KeyError:
-            logger.error("Failed to run Mmtests plugin: the returned json does not have 'files' or 'Url' keys")
+            logger.debug("Failed to run Mmtests plugin: the returned json does not have 'files' or 'Url' keys")
             return
 
         for url in file_urls:
