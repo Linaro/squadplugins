@@ -1,3 +1,7 @@
+# 1.29.1
+
+This release adds the mmtests properly to the setup of plugins.
+
 # 1.29
 
 This release adds the mmtests plugin. For now, it'll attempt
