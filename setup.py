@@ -11,6 +11,7 @@ setup(
         'squad_plugins': [
             'tradefed=tradefed:Tradefed',
             'ltp=ltp:LtpLogs',
+            'mmtests=mmtests:Mmtests',
         ]
     },
     license='AGPLv3+',
