@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name='squad-linaro-plugins',
-    version='1.28.3',
+    version='1.29',
     author='Milosz Wasilewski',
     author_email='milosz.wasilewski@linaro.org',
     url='https://github.com/linaro/squadplugins',

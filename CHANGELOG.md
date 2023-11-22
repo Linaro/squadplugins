@@ -1,3 +1,8 @@
+# 1.29
+
+This release adds the mmtests plugin. For now, it'll attempt
+downloading attachments from tuxsuite backend.
+
 # 1.28.3
 
 This release adds a retry strategy when requesting files.
