@@ -6,7 +6,8 @@ import xmlrpc
 import yaml
 import json
 import xml.etree.ElementTree as ET
-from celery import chord as celery_chord
+import time
+from celery import group as celery_group
 from django.conf import settings
 from io import BytesIO
 from requests.adapters import HTTPAdapter, Retry
@@ -202,7 +203,23 @@ class Tradefed(BasePlugin):
             task = self._enqueue_testcases_chunk(testcases, testrun, suite)
             task_list.append(task)
 
-        celery_chord(task_list)(update_build_status.s(testrun.pk))
+        # Run all subtasks in parallel and wait for them to finish
+        task_count = len(task_list)
+        group = celery_group(task_list).apply_async()
+        timeout = 2 * 60 * 60  # 2h
+        logger.info(f"Dispatching {task_count} subtasks")
+        while group.waiting() and timeout:
+            time.sleep(1)
+            timeout -= 1
+            completed = group.completed_count()
+            logger.debug(f"Waiting {completed} of {task_count} subtasks to finish ({timeout})")
+
+        if group.successful():
+            logger.info(f"All {task_count} subtasks completed successfully")
+        else:
+            logger.error(f"{completed} tasks failed out of {task_count}")
+
+        update_build_status(testrun.pk)
 
     def _assign_test_log(self, buf, test_list):
         # assume buf is a file-like object
