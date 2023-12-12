@@ -1,3 +1,13 @@
+# 1.30
+
+This release changes how tradefed handles subtasks. It used
+to spawn many celery subtasks, updating project status when
+all subtasks are finished. The problem is that the main thread
+returned right away, making SQUAD think that tradefed is
+ready, causing inconsistencies. Now, the release makes the main
+thread wait for all subtasks to finish before returning back
+to SQUAD.
+
 # 1.29.1
 
 This release adds the mmtests properly to the setup of plugins.

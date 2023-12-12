@@ -2,9 +2,9 @@ from setuptools import setup
 
 setup(
     name='squad-linaro-plugins',
-    version='1.29.1',
-    author='Milosz Wasilewski',
-    author_email='milosz.wasilewski@linaro.org',
+    version='1.30',
+    author='Charles Oliveira',
+    author_email='charles.oliveira@linaro.org',
     url='https://github.com/linaro/squadplugins',
     packages=['tradefed', 'ltp', 'mmtests'],
     entry_points={
