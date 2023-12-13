@@ -848,27 +848,13 @@ class TradefedLogsPluginTest(unittest.TestCase):
         type(testrun).build = PropertyMock(return_value=build)
         type(testrun).pk = PropertyMock(return_value=1)
 
-        class CeleryGroupMock:
-            def waiting(self):
-                return False
+        def chord_mock_return_func(tasklist):
+            pass
 
-            def successful(self):
-                return True
+        def chord_mock_func(task):
+            return chord_mock_return_func
 
-            def completed_count(self):
-                return 0
-
-        class ApplyAsyncMock():
-            def __init__(self, tasklist):
-                pass
-
-            def apply_async(self):
-                return CeleryGroupMock()
-
-        def celery_group_mock_func(tasklist):
-            return ApplyAsyncMock(tasklist)
-
-        def update_build_status_mock(testrun_pk):
+        def update_s(testrun_pk):
             return {}
 
         def goc_mock(*args, **kwargs):
@@ -899,8 +885,8 @@ class TradefedLogsPluginTest(unittest.TestCase):
         with patch("squad.core.models.SuiteMetadata.objects.get_or_create", goc_mock), \
                 patch("squad.core.models.Suite.objects.get_or_create", goc_mock), \
                 patch("squad.core.models.KnownIssue.objects.get_or_create", goc_knownissues), \
-                patch("tradefed.celery_group", celery_group_mock_func), \
-                patch("tradefed.update_build_status", update_build_status_mock), \
+                patch("tradefed.celery_chord", chord_mock_func), \
+                patch("tradefed.tasks.update_build_status.s", update_s), \
                 patch("tradefed.Tradefed._enqueue_testcases_chunk", enqueue_testcases):
             self.plugin._extract_cts_results(xmlbuf, testrun, 'cts')
 

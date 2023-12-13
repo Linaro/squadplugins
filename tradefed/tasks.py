@@ -3,7 +3,7 @@ import json
 
 from collections import defaultdict
 
-from squad.core.models import SuiteMetadata, Test, KnownIssue, Status, TestRun, PluginScratch
+from squad.core.models import SuiteMetadata, Test, KnownIssue, Status, TestRun, ProjectStatus, PluginScratch
 from squad.celery import app as celery
 from squad.core.utils import join_name
 from squad.core.tasks import RecordTestRunStatus
@@ -13,13 +13,15 @@ logger = logging.getLogger()
 
 
 @celery.task(queue='ci_fetch')
-def update_build_status(testrun_id):
+def update_build_status(results_list, testrun_id):
     testrun = TestRun.objects.get(pk=testrun_id)
 
-    # Compute stats all at once
+    # Comput stats all at once
     Status.objects.filter(test_run=testrun).all().delete()
     testrun.status_recorded = False
     RecordTestRunStatus()(testrun)
+
+    ProjectStatus.create_or_update(testrun.build)
 
 
 @celery.task(queue='ci_fetch')
