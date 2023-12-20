@@ -1,3 +1,9 @@
+# 1.31
+
+This release reverts the change from release 1.30 and rework
+the fix by simply calling a callback task from SQUAD that
+updates testjob status.
+
 # 1.30
 
 This release changes how tradefed handles subtasks. It used
