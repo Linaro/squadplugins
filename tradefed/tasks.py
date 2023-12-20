@@ -7,21 +7,22 @@ from squad.core.models import SuiteMetadata, Test, KnownIssue, Status, TestRun, 
 from squad.celery import app as celery
 from squad.core.utils import join_name
 from squad.core.tasks import RecordTestRunStatus
+from squad.ci.tasks import update_testjob_status
 
 
 logger = logging.getLogger()
 
 
 @celery.task(queue='ci_fetch')
-def update_build_status(results_list, testrun_id):
+def update_build_status(results_list, testrun_id, job_id, job_status):
     testrun = TestRun.objects.get(pk=testrun_id)
 
-    # Comput stats all at once
+    # Compute stats all at once
     Status.objects.filter(test_run=testrun).all().delete()
     testrun.status_recorded = False
     RecordTestRunStatus()(testrun)
 
-    ProjectStatus.create_or_update(testrun.build)
+    update_testjob_status.delay(job_id, job_status)
 
 
 @celery.task(queue='ci_fetch')

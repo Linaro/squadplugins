@@ -11,6 +11,7 @@ from django.conf import settings
 from io import BytesIO
 from requests.adapters import HTTPAdapter, Retry
 from squad.core.models import Suite, SuiteMetadata, PluginScratch, KnownIssue
+from squad.ci.tasks import update_testjob_status
 from squad.plugins import Plugin as BasePlugin
 from urllib.parse import urljoin
 
@@ -59,6 +60,9 @@ class ResultFiles(object):
 class Tradefed(BasePlugin):
     name = "Tradefed"
     tradefed_results_url = None
+
+    def has_subtasks(self):
+        return True
 
     def __iterate_test_names(self, tradefed_tree, test_suite_name_list, test_name_list, join_char):
         prefix_string = "/".join(test_suite_name_list[2:])
@@ -126,7 +130,7 @@ class Tradefed(BasePlugin):
             will be transformed to JSON when saved to plugin scratch.
         """
 
-        chunk_size = 1000
+        chunk_size = 500
         module_name = ''
         testcases = []
         testcase = None
@@ -202,7 +206,7 @@ class Tradefed(BasePlugin):
             task = self._enqueue_testcases_chunk(testcases, testrun, suite)
             task_list.append(task)
 
-        celery_chord(task_list)(update_build_status.s(testrun.pk))
+        celery_chord(task_list)(update_build_status.s(testrun.pk, self.extra_args.get("job_id"), self.extra_args.get("job_status")))
 
     def _assign_test_log(self, buf, test_list):
         # assume buf is a file-like object
@@ -437,11 +441,16 @@ class Tradefed(BasePlugin):
         if not testjob.backend.implementation_type == 'lava':
             logger.error(f"Test job {testjob.id} doesn't come from LAVA")
             logger.debug(testjob.backend.implementation_type)
+            update_testjob_status.delay(testjob.id, self.extra_args.get("job_status"))
             return
 
         if not testjob.definition:
             logger.warning("Test job %s doesn't have a definition" % testjob)
+            update_testjob_status.delay(testjob.id, self.extra_args.get("job_status"))
             return
+
+        # Required later on to update job status
+        self.extra_args["job_id"] = testjob.id
 
         # check if testjob is a tradefed job
         logger.debug("Loading test job definition")
@@ -449,6 +458,7 @@ class Tradefed(BasePlugin):
         # find all tests
         if 'actions' not in job_definition.keys():
             logger.warning("Test job %s definition doesn't have 'actions'" % testjob)
+            update_testjob_status.delay(testjob.id, self.extra_args.get("job_status"))
             return
 
         for test_action in [action for action in job_definition['actions'] if 'test' in action.keys()]:

@@ -854,7 +854,7 @@ class TradefedLogsPluginTest(unittest.TestCase):
         def chord_mock_func(task):
             return chord_mock_return_func
 
-        def update_s(testrun_pk):
+        def update_s(testrun_pk, job_id, job_status):
             return {}
 
         def goc_mock(*args, **kwargs):
