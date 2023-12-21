@@ -3,7 +3,7 @@ import json
 
 from collections import defaultdict
 
-from squad.core.models import SuiteMetadata, Test, KnownIssue, Status, TestRun, ProjectStatus, PluginScratch
+from squad.core.models import SuiteMetadata, Test, KnownIssue, Status, TestRun, PluginScratch
 from squad.celery import app as celery
 from squad.core.utils import join_name
 from squad.core.tasks import RecordTestRunStatus
