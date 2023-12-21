@@ -130,7 +130,7 @@ class Tradefed(BasePlugin):
             will be transformed to JSON when saved to plugin scratch.
         """
 
-        chunk_size = 500
+        chunk_size = 100
         module_name = ''
         testcases = []
         testcase = None
