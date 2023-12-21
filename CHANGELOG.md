@@ -1,3 +1,8 @@
+# 1.31.1
+
+This release lowers the number of tests batch when queueing tasks.
+It should go easier on DB if multiple workers are bashing it.
+
 # 1.31
 
 This release reverts the change from release 1.30 and rework
