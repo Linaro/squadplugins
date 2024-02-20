@@ -198,7 +198,7 @@ class Tradefed(BasePlugin):
                 element.clear()
 
         except ET.ParseError as e:
-            logger.warning(e)
+            logger.error(f"[CTS/VTS] Error extracting cases: {e}")
             return None
 
         # Process remaining test cases that didn't make to the last chunk
