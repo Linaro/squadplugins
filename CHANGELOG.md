@@ -1,3 +1,8 @@
+# 1.32
+
+This release adds a missing update to job status when jobs
+do not have tradefed artefacts
+
 # 1.31.2
 
 This release logs xml parsing as error
