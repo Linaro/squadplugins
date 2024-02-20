@@ -461,6 +461,7 @@ class Tradefed(BasePlugin):
             update_testjob_status.delay(testjob.id, self.extra_args.get("job_status"))
             return
 
+        results_extracted = False
         for test_action in [action for action in job_definition['actions'] if 'test' in action.keys()]:
             if 'definitions' not in test_action['test'].keys():
                 continue
@@ -501,6 +502,7 @@ class Tradefed(BasePlugin):
                         # extract_cts_results also assigns the log
                         if results.test_results is not None:
                             self._extract_cts_results(results.test_results.contents, testjob.testrun, test_definition['name'])
+                            results_extracted = True
                     else:
                         failed = testjob.testrun.tests.filter(result=False)
                         if results.test_results is not None:
@@ -524,5 +526,10 @@ class Tradefed(BasePlugin):
                         if results.tradefed_zipfile.name is None:
                             results.tradefed_zipfile.name = "tradefed.tar.gz"
                         self._create_testrun_attachment(testjob.testrun, results.tradefed_zipfile.name, results.tradefed_zipfile, results.tradefed_zipfile.mimetype)
+
+        # Update the status even if the job does not have a proper tradefed file to process
+        if not results_extracted:
+            logger.warning("This job does not have a valid tradefed file, updating status anyways")
+            update_testjob_status.delay(testjob.id, self.extra_args.get("job_status"))
 
         logger.info("Finishing CTS/VTS plugin for test run: %s" % testjob)

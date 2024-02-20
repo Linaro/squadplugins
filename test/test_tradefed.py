@@ -458,16 +458,20 @@ class TradefedLogsPluginTest(unittest.TestCase):
     def tearDown(self):
         self.tarfile.close()
 
+    @patch("tradefed.Tradefed._extract_cts_results")
     @patch("tradefed.Tradefed._create_testrun_attachment")
     @patch("tradefed.Tradefed._assign_test_log")
     @patch("tradefed.Tradefed._get_from_artifactorial")
+    @patch("tradefed.update_testjob_status.delay")
     @patch("tradefed.Tradefed.tradefed_results_url", new_callable=PropertyMock)
     def test_postprocess_testjob(
         self,
         results_url_mock,
+        update_testjob_status_mock,
         get_from_artifactorial_mock,
         assign_test_log_mock,
         create_testrun_attachment_mock,
+        extract_cts_results_mock,
     ):
         results_url_mock.return_value = "http://foo.com"
         get_from_artifactorial_mock.return_value = ResultFiles()
@@ -493,14 +497,17 @@ class TradefedLogsPluginTest(unittest.TestCase):
         testjob_mock.testrun.save.assert_called_with()
         assign_test_log_mock.assert_not_called()
         create_testrun_attachment_mock.assert_not_called()
+        update_testjob_status_mock.assert_called()
 
     @patch("tradefed.Tradefed._create_testrun_attachment")
     @patch("tradefed.Tradefed._assign_test_log")
     @patch("tradefed.Tradefed._get_from_artifactorial")
+    @patch("tradefed.update_testjob_status.delay")
     @patch("tradefed.Tradefed.tradefed_results_url", new_callable=PropertyMock)
     def test_postprocess_testjob_interactive(
         self,
         results_url_mock,
+        update_testjob_status_mock,
         get_from_artifactorial_mock,
         assign_test_log_mock,
         create_testrun_attachment_mock,
@@ -529,14 +536,17 @@ class TradefedLogsPluginTest(unittest.TestCase):
         testjob_mock.testrun.save.assert_called_with()
         assign_test_log_mock.assert_not_called()
         create_testrun_attachment_mock.assert_not_called()
+        update_testjob_status_mock.assert_called()
 
     @patch("tradefed.Tradefed._create_testrun_attachment")
     @patch("tradefed.Tradefed._assign_test_log")
     @patch("tradefed.Tradefed._get_from_artifactorial")
+    @patch("tradefed.update_testjob_status.delay")
     @patch("tradefed.Tradefed.tradefed_results_url", new_callable=PropertyMock)
     def test_postprocess_testjob_save_attachments(
         self,
         results_url_mock,
+        update_testjob_status_mock,
         get_from_artifactorial_mock,
         assign_test_log_mock,
         create_testrun_attachment_mock,
@@ -573,6 +583,42 @@ class TradefedLogsPluginTest(unittest.TestCase):
             'test_results.xml',
             result_files.test_results,
             'application/xml')
+        update_testjob_status_mock.assert_called()
+
+    @patch("tradefed.Tradefed._create_testrun_attachment")
+    @patch("tradefed.Tradefed._assign_test_log")
+    @patch("tradefed.Tradefed._get_from_artifactorial")
+    @patch("tradefed.update_testjob_status.delay")
+    @patch("tradefed.Tradefed.tradefed_results_url", new_callable=PropertyMock)
+    def test_postprocess_testjob_empty_artifactorial_results(
+        self,
+        results_url_mock,
+        update_testjob_status_mock,
+        get_from_artifactorial_mock,
+        assign_test_log_mock,
+        create_testrun_attachment_mock,
+    ):
+        get_from_artifactorial_mock.return_value = None
+        testjob_mock = MagicMock()
+        id_mock = PropertyMock(return_value="999111")
+        type(testjob_mock).pk = id_mock
+        job_id_mock = PropertyMock(return_value="1234")
+        type(testjob_mock).job_id = job_id_mock
+        testjob_mock.backend = MagicMock()
+        implementation_type_mock = PropertyMock(return_value="lava")
+        type(testjob_mock.backend).implementation_type = implementation_type_mock
+        definition_mock = PropertyMock(return_value=JOB_DEFINITION)
+        type(testjob_mock).definition = definition_mock
+        testjob_target = MagicMock()
+        project_settings_mock = PropertyMock(return_value='{}')
+        type(testjob_target).project_settings = project_settings_mock
+        type(testjob_mock).target = testjob_target
+        self.plugin.postprocess_testjob(testjob_mock)
+        implementation_type_mock.assert_called_once_with()
+        definition_mock.assert_called_with()
+        results_url_mock.assert_not_called()
+        create_testrun_attachment_mock.assert_not_called()
+        update_testjob_status_mock.assert_called()
 
     def test_create_testrun_attachment(self):
         testrun_mock = Mock()
