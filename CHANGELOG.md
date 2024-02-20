@@ -1,3 +1,7 @@
+# 1.31.2
+
+This release logs xml parsing as error
+
 # 1.31.1
 
 This release lowers the number of tests batch when queueing tasks.
