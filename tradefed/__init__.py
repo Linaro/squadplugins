@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 import requests
 import tarfile
 import xmlrpc
@@ -10,10 +11,10 @@ from celery import chord as celery_chord
 from django.conf import settings
 from io import BytesIO
 from requests.adapters import HTTPAdapter, Retry
-from squad.core.models import Suite, SuiteMetadata, PluginScratch, KnownIssue
+from squad.core.models import Suite, SuiteMetadata, PluginScratch, KnownIssue, TestRun
 from squad.ci.tasks import update_testjob_status
 from squad.plugins import Plugin as BasePlugin
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse, parse_qs
 
 from .tasks import create_testcase_tests, update_build_status
 
@@ -260,28 +261,81 @@ class Tradefed(BasePlugin):
         extracted_container.length = tar_member.size
         return extracted_container
 
-    def _download_results(self, result_dict):
+    def _extract_tarball_filename_from_url(self, url):
+        # Tradefed filename regex
+        regex = re.compile(r".*?([\w.-]+tar.xz)$")
+
+        # Look at url path
+        parsed = urlparse(url)
+        candidate_filename = os.path.basename(parsed.path)
+        logger.debug(f"Looking for filename in {candidate_filename}")
+        matches = regex.match(candidate_filename)
+        if matches is not None:
+            return matches.group(1)
+
+        # Look at any querystring parameter
+        logger.debug(f"Looking for filename in {parsed.query}")
+        query = parse_qs(parsed.query)
+        for _, values in query.items():
+            for value in values:
+                if regex.match(value):
+                    return value
+
+        logger.debug("Giving up trying to look for tradefed filename in {url}")
+        return None
+
+    def _download_results(self, url):
         results = ResultFiles()
         session = get_session()
         try:
-            reference = result_dict['metadata']['reference']
+            logger.debug(f"Downloading CTS/VTS log from: {url}")
+            self.tradefed_results_url = url
 
-            logger.debug(f"Downloading CTS/VTS log from: {reference}")
-            self.tradefed_results_url = reference
+            contents = None
+            mime_type = None
+            filename = None
+            if url.startswith(settings.BASE_URL):
+                regex = r".*?/testruns/(\d+)/attachments/?\?filename=(.*?)$"
+                matches = re.match(regex, url)
+                if matches is None:
+                    logger.error(f"The tradefed url \"{url}\" belongs to this instance of SQUAD, but it does not look valid")
+                    return results
 
-            result_tarball_request = session.get(self.tradefed_results_url)
-            if result_tarball_request.status_code != 200:
-                logger.error(f"Failed to download tradefed file {self.tradefed_results_url}")
-                return results
+                testrun_id, filename = matches.groups()
 
-            result_tarball_request.raw.decode_content = True
-            r = BytesIO(result_tarball_request.content)
+                queryset = TestRun.objects.filter(id=testrun_id)
+                if not queryset.exists():
+                    logger.error(f"The tradefed url \"{url}\" belongs to this instance of SQUAD, but this testrun does not exist")
+                    return results
 
+                testrun = queryset.first()
+                attachments = testrun.attachments.filter(filename=filename)
+                if attachments.count() == 0:
+                    logger.error(f"The tradefed url \"{url}\" belongs to this instance of SQUAD, but the attachment does not exist within the testrun")
+                    return results
+
+                attachment = attachments.first()
+                contents = attachment.data
+                mime_type = attachment.mimetype
+                filename = os.path.basename(attachment.filename)
+
+            else:
+                response = session.get(self.tradefed_results_url)
+                if response.status_code != 200:
+                    logger.error(f"Failed to download tradefed file {self.tradefed_results_url}")
+                    return results
+
+                response.raw.decode_content = True
+                contents = response.content
+                filename = self._extract_tarball_filename_from_url(response.url)
+                mime_type = response.headers.get("Content-Type")
+
+            r = BytesIO(contents)
             results.tradefed_zipfile = ExtractedResult()
             results.tradefed_zipfile.contents = r
-            results.tradefed_zipfile.length = len(result_tarball_request.content)
-            results.tradefed_zipfile.name = result_tarball_request.url.rsplit("/", 1)[1]
-            results.tradefed_zipfile.mimetype = result_tarball_request.headers.get("Content-Type")
+            results.tradefed_zipfile.length = len(contents)
+            results.tradefed_zipfile.name = filename
+            results.tradefed_zipfile.mimetype = mime_type
 
             logger.debug(f"Retrieved {results.tradefed_zipfile.length} bytes")
 
@@ -314,8 +368,6 @@ class Tradefed(BasePlugin):
                     logger.debug("tradefed_logcat object is empty: %s" % (results.tradefed_logcat is None))
 
             logger.debug('Done extracting members')
-        except KeyError:
-            logger.error("KeyError: result_dict['metadata']['reference']")
         except tarfile.TarError as e:
             logger.error(e)
         except EOFError as e:
@@ -349,6 +401,7 @@ class Tradefed(BasePlugin):
         logger.debug("Retrieving result summary for job: %s" % testjob.job_id)
         suites = None
         lava_implementation = testjob.backend.get_implementation()
+        # TODO: consider Tuxsuite backend
         session = get_session()
         if lava_implementation.use_xml_rpc:
             suites = lava_implementation.proxy.results.get_testjob_suites_list_yaml(testjob.job_id)
@@ -394,7 +447,7 @@ class Tradefed(BasePlugin):
                         if len(yaml_results) > 0:
                             for result in yaml_results:
                                 if result['name'] == 'test-attachment':
-                                    return self._download_results(result)
+                                    return self._download_results(result['metadata']['reference'])
                             offset = offset + limit
                             logger.debug("requesting results for %s with offset of %s"
                                          % (suite['name'], offset))
@@ -415,8 +468,7 @@ class Tradefed(BasePlugin):
                             # there should be only one
                             metadata = yaml.load(test_result['metadata'], Loader=yaml.CLoader)
                             if 'reference' in metadata.keys():
-                                test_result['metadata'] = metadata
-                                return self._download_results(test_result)
+                                return self._download_results(metadata['reference'])
         return None
 
     def _create_testrun_attachment(self, testrun, name, extracted_file, mimetype):
@@ -434,102 +486,136 @@ class Tradefed(BasePlugin):
 
         attachment.save_file(name, data)
 
-    def postprocess_testjob(self, testjob):
-        # get related testjob
-        logger.info("Starting CTS/VTS plugin for test job: %s" % testjob)
-        logging.debug("Processing test job: %s" % testjob)
-        if not testjob.backend.implementation_type == 'lava':
-            logger.error(f"Test job {testjob.id} doesn't come from LAVA")
-            logger.debug(testjob.backend.implementation_type)
-            update_testjob_status.delay(testjob.id, self.extra_args.get("job_status"))
-            return
+    def _extract_tradefed_from_job_definition(self, testjob):
+        """
+        This function looks up in job definition and return 2 things
+          * the tradefed yaml file name
+          * the results format
+
+        Here's a snippet of a definition that contain that information
+
+        ```
+            actions:
+            - test:
+                docker:
+                  image: linaro/lava-android-test:focal-2024.02.20-01
+                  local: true
+                timeout:
+                  minutes: 900
+                definitions:
+                - repository: https://github.com/Linaro/test-definitions.git
+          >>>>>>> name: cts-lkft
+                  from: git
+          >>>>>>> path: automated/android/noninteractive-tradefed/tradefed.yaml
+                  params:
+                    TEST_PARAMS: cts --abi arm64-v8a -m CtsDeqpTestCases --disable-reboot
+                    TEST_URL:
+                      http://lkft-cache.lkftlab/api/v1/fetch?url=http://testdata.linaro.org/lkft/aosp-stable/android/lkft/lkft-aosp-android13-    cts/2113/android-cts.zip
+                    TEST_PATH: android-cts
+          >>>>>>>>> RESULTS_FORMAT: aggregated
+        ```
+
+        If there is a `tradefed.yaml` in a `test` block, extract `name` and `RESULTS_FORMAT`.
+
+        """
 
         if not testjob.definition:
             logger.warning("Test job %s doesn't have a definition" % testjob)
             update_testjob_status.delay(testjob.id, self.extra_args.get("job_status"))
-            return
+            return []
 
-        # Required later on to update job status
-        self.extra_args["job_id"] = testjob.id
-
-        # check if testjob is a tradefed job
         logger.debug("Loading test job definition")
         job_definition = yaml.load(testjob.definition, Loader=yaml.CLoader)
-        # find all tests
         if 'actions' not in job_definition.keys():
             logger.warning("Test job %s definition doesn't have 'actions'" % testjob)
             update_testjob_status.delay(testjob.id, self.extra_args.get("job_status"))
-            return
+            return []
 
-        results_extracted = False
-        for test_action in [action for action in job_definition['actions'] if 'test' in action.keys()]:
-            if 'definitions' not in test_action['test'].keys():
+        tradefed_files = []
+        test_actions = [a for a in job_definition['actions'] if 'test' in a.keys()]
+        for action in test_actions:
+            if 'definitions' not in action['test'].keys():
                 continue
 
-            for test_definition in test_action['test']['definitions']:
-                logger.debug("Processing test %s" % test_definition['name'])
-                if "tradefed.yaml" not in test_definition['path']:  # is there any better heuristic?
-                    continue
+            for test_definition in action['test']['definitions']:
+                if "tradefed.yaml" in test_definition['path']:
+                    try:
+                        name = test_definition['name']
+                        results_format = test_definition['params']['RESULTS_FORMAT']
+                        tradefed_files.append((name, results_format))
+                    except KeyError:
+                        pass
 
-                # download and parse results
-                results = None
-                try:
-                    results = self._get_from_artifactorial(testjob, test_definition['name'])
-                except xmlrpc.client.ProtocolError as err:
-                    error_cleaned = 'Failed to process CTS/VTS tests: %s - %s' % (err.errcode, testjob.backend.get_implementation().url_remove_token(str(err.errmsg)))
-                    logger.error(error_cleaned)
+        return tradefed_files
 
-                    testjob.failure += error_cleaned
-                    testjob.save()
+    def postprocess_testjob(self, testjob):
+        self.extra_args["job_id"] = testjob.id
 
-                if results is None:
-                    continue
+        logger.info("Starting CTS/VTS plugin for test job: %s" % testjob)
+        if not testjob.backend.implementation_type == 'lava':
+            logger.error(f"Test job {testjob.id} doesn't come from LAVA")
+            update_testjob_status.delay(testjob.id, self.extra_args.get("job_status"))
+            return
 
-                logger.debug("Processing results")
-                # add metadata key for taball download
-                testjob.testrun.metadata["tradefed_results_url_%s" % testjob.job_id] = self.tradefed_results_url
-                logger.debug("about to save testrun")
-                testjob.testrun.save()
-                logger.debug("testrun saved")
-                # only failed tests have logs
-                if testjob.testrun is not None:
-                    ps = None
-                    if testjob.target.project_settings is not None:
-                        ps = yaml.safe_load(testjob.target.project_settings)
-                    if ps and ps.get("PLUGINS_TRADEFED_EXTRACT_AGGREGATED", False) and \
-                            'params' in test_definition.keys() and \
-                            ('RESULTS_FORMAT' not in test_definition['params'] or ('RESULTS_FORMAT' in test_definition['params'] and test_definition['params']['RESULTS_FORMAT'] == 'aggregated')):
-                        # extract_cts_results also assigns the log
-                        if results.test_results is not None:
-                            self._extract_cts_results(results.test_results.contents, testjob.testrun, test_definition['name'])
-                            results_extracted = True
-                    else:
-                        failed = testjob.testrun.tests.filter(result=False)
-                        if results.test_results is not None:
-                            self._assign_test_log(results.test_results.contents, failed)
-                    if results.test_results is not None:
-                        self._convert_paths(testjob.testrun, results)
-                        self._create_testrun_attachment(testjob.testrun, "test_results.xml", results.test_results, "application/xml")
-                    if results.test_result_xslt is not None:
-                        self._create_testrun_attachment(testjob.testrun, "compatibility_result.xsl", results.test_result_xslt, "application/xslt+xml")
-                    if results.test_result_css is not None:
-                        self._create_testrun_attachment(testjob.testrun, "compatibility_result.css", results.test_result_css, "text/css")
-                    if results.test_result_image is not None:
-                        self._create_testrun_attachment(testjob.testrun, "logo.png", results.test_result_image, "image/png")
-                    if results.tradefed_stdout is not None:
-                        self._create_testrun_attachment(testjob.testrun, "teadefed_stdout.txt", results.tradefed_stdout, "text/plain")
-                    if results.tradefed_logcat is not None:
-                        self._create_testrun_attachment(testjob.testrun, "teadefed_logcat.txt", results.tradefed_logcat, "text/plain")
-                    if results.tradefed_zipfile is not None:
-                        if results.tradefed_zipfile.mimetype is None:
-                            results.tradefed_zipfile.mimetype = "application/x-tar"
-                        if results.tradefed_zipfile.name is None:
-                            results.tradefed_zipfile.name = "tradefed.tar.gz"
-                        self._create_testrun_attachment(testjob.testrun, results.tradefed_zipfile.name, results.tradefed_zipfile, results.tradefed_zipfile.mimetype)
+        tradefed_files = self._extract_tradefed_from_job_definition(testjob)
+        if len(tradefed_files) != 1:
+            logger.error(f"Job {testjob.id} has {len(tradefed_files)} tradefed files in the definition, it should have 1")
+            update_testjob_status.delay(testjob.id, self.extra_args.get("job_status"))
+            logger.info("Finishing CTS/VTS plugin for test run: %s" % testjob)
+            return
+
+        tradefed_name, results_format = tradefed_files[0]
+
+        results_extracted = False
+        results = None
+        try:
+            results = self._get_from_artifactorial(testjob, tradefed_name)
+        except xmlrpc.client.ProtocolError as err:
+            error_cleaned = 'Failed to process CTS/VTS tests: %s - %s' % (err.errcode, testjob.backend.get_implementation().url_remove_token(str(err.errmsg)))
+            logger.error(error_cleaned)
+
+            testjob.failure += error_cleaned
+            testjob.save()
+
+        if results is None:
+            logger.info("Aborting CTS/VTS, no tradefed file found")
+            update_testjob_status.delay(testjob.id, self.extra_args.get("job_status"))
+            return
+
+        logger.debug("Processing results")
+        testjob.testrun.metadata["tradefed_results_url_%s" % testjob.job_id] = self.tradefed_results_url
+        testjob.testrun.save()
+
+        if results.test_results is not None:
+            if testjob.target.get_setting("PLUGINS_TRADEFED_EXTRACT_AGGREGATED", False) and results_format == "aggregated":
+                self._extract_cts_results(results.test_results.contents, testjob.testrun, tradefed_name)
+                results_extracted = True
+            else:
+                failed = testjob.testrun.tests.filter(result=False)
+                self._assign_test_log(results.test_results.contents, failed)
+
+            self._convert_paths(testjob.testrun, results)
+
+        attachments = [
+            ("test_results.xml", results.test_results, "application/xml"),
+            ("compatibility_result.xsl", results.test_result_xslt, "application/xslt+xml"),
+            ("compatibility_result.css", results.test_result_css, "text/css"),
+            ("logo.png", results.test_result_image, "image/png"),
+            ("teadefed_stdout.txt", results.tradefed_stdout, "text/plain"),
+            ("teadefed_logcat.txt", results.tradefed_logcat, "text/plain"),
+        ]
+
+        if results.tradefed_zipfile is not None:
+            attachments.append(
+                (results.tradefed_zipfile.name or "tradefed.tar.gz", results.tradefed_zipfile, results.tradefed_zipfile.mimetype or "application/x-tar")
+            )
+
+        for filename, attr, mimetype in attachments:
+            if attr is not None:
+                self._create_testrun_attachment(testjob.testrun, filename, attr, mimetype)
 
         # Update the status even if the job does not have a proper tradefed file to process
         if not results_extracted:
-            logger.warning("This job does not have a valid tradefed file, updating status anyways")
             update_testjob_status.delay(testjob.id, self.extra_args.get("job_status"))
 
         logger.info("Finishing CTS/VTS plugin for test run: %s" % testjob)
