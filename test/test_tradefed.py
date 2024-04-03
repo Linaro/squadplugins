@@ -735,7 +735,7 @@ class TradefedLogsPluginTest(unittest.TestCase):
                 headers={"Content-Type": "application/x-tar"},
             )
 
-            results = self.plugin._download_results(RESULT_DICT)
+            results = self.plugin._download_results(RESULT_URL)
             self.assertTrue(fake_request.called)
             self.assertEqual(self.plugin.tradefed_results_url, RESULT_URL)
             self.assertIsNotNone(results.test_results)
@@ -754,7 +754,7 @@ class TradefedLogsPluginTest(unittest.TestCase):
                 headers={"Content-Type": "application/x-tar"},
             )
 
-            results = self.plugin._download_results(RESULT_DICT)
+            results = self.plugin._download_results(RESULT_URL)
             self.assertEqual(self.plugin.tradefed_results_url, RESULT_URL)
             self.assertIsNone(results.test_results)
             self.assertIsNone(results.tradefed_stdout)
@@ -772,7 +772,7 @@ class TradefedLogsPluginTest(unittest.TestCase):
                 headers={"Content-Type": "application/x-tar"},
             )
 
-            results = self.plugin._download_results(RESULT_DICT)
+            results = self.plugin._download_results(RESULT_URL)
             self.assertEqual(self.plugin.tradefed_results_url, RESULT_URL)
             self.assertIsNone(results.test_results)
             self.assertIsNone(results.tradefed_stdout)
@@ -790,7 +790,7 @@ class TradefedLogsPluginTest(unittest.TestCase):
                 headers={"Content-Type": "application/x-tar"},
             )
 
-            results = self.plugin._download_results(RESULT_DICT)
+            results = self.plugin._download_results(RESULT_URL)
             self.assertEqual(self.plugin.tradefed_results_url, RESULT_URL)
             self.assertIsNone(results.test_results)
             self.assertIsNone(results.tradefed_stdout)
@@ -805,7 +805,7 @@ class TradefedLogsPluginTest(unittest.TestCase):
                 headers={"Content-Type": "application/x-tar"},
             )
 
-            results = self.plugin._download_results(RESULT_DICT)
+            results = self.plugin._download_results(RESULT_URL)
             self.assertEqual(self.plugin.tradefed_results_url, RESULT_URL)
             self.assertIsNone(results.test_results)
             self.assertIsNone(results.tradefed_stdout)
@@ -820,11 +820,103 @@ class TradefedLogsPluginTest(unittest.TestCase):
                 headers={"Content-Type": "application/x-tar"},
             )
 
-            results = self.plugin._download_results(RESULT_DICT)
+            results = self.plugin._download_results(RESULT_URL)
             self.assertEqual(self.plugin.tradefed_results_url, RESULT_URL)
             self.assertIsNone(results.test_results)
             self.assertIsNone(results.tradefed_stdout)
             self.assertIsNone(results.tradefed_logcat)
+
+    @patch("tradefed.settings")
+    def test_download_results_from_squad_bad_url(self, mock_settings):
+        mock_settings.BASE_URL = "http://squad.com"
+        url = "http://squad.com/not-really-valid"
+        results = self.plugin._download_results(url)
+        self.assertEqual(self.plugin.tradefed_results_url, url)
+        self.assertIsNone(results.test_results)
+        self.assertIsNone(results.tradefed_stdout)
+        self.assertIsNone(results.tradefed_logcat)
+
+    @patch("tradefed.TestRun")
+    @patch("tradefed.settings")
+    def test_download_results_from_squad_testrun_not_found(self, mock_settings, mock_testrun):
+        queryset = MagicMock()
+        queryset.exists.return_value = False
+
+        objects = MagicMock()
+        objects.filter.return_value = queryset
+
+        mock_testrun.objects = objects
+        mock_settings.BASE_URL = "http://squad.com"
+
+        url = "http://squad.com/api/testruns/1/attachments?filename=tradefed.tar.xz"
+        results = self.plugin._download_results(url)
+        self.assertEqual(self.plugin.tradefed_results_url, url)
+        self.assertIsNone(results.test_results)
+        self.assertIsNone(results.tradefed_stdout)
+        self.assertIsNone(results.tradefed_logcat)
+
+    @patch("tradefed.TestRun")
+    @patch("tradefed.settings")
+    def test_download_results_from_squad_attachment_not_found(self, mock_settings, mock_testrun):
+        attachments_queryset = MagicMock()
+        attachments_queryset.count.return_value = 0
+
+        attachments = MagicMock()
+        attachments.filter.return_value = attachments_queryset
+
+        testrun = MagicMock()
+        testrun.attachments = attachments
+
+        queryset = MagicMock()
+        queryset.exists.return_value = True
+        queryset.first.return_value = testrun
+
+        objects = MagicMock()
+        objects.filter.return_value = queryset
+
+        mock_testrun.objects = objects
+        mock_settings.BASE_URL = "http://squad.com"
+
+        url = "http://squad.com/api/testruns/1/attachments?filename=tradefed.tar.xz"
+        results = self.plugin._download_results(url)
+        self.assertEqual(self.plugin.tradefed_results_url, url)
+        self.assertIsNone(results.test_results)
+        self.assertIsNone(results.tradefed_stdout)
+        self.assertIsNone(results.tradefed_logcat)
+
+    @patch("tradefed.TestRun")
+    @patch("tradefed.settings")
+    def test_download_results_from_squad(self, mock_settings, mock_testrun):
+        attachment = MagicMock()
+        attachment.data = b"1"
+        attachment.mimetype.return_value = "text/plain"
+        attachment.filename.return_value = "tradefed.tar.xz"
+
+        attachments_queryset = MagicMock()
+        attachments_queryset.count.return_value = 1
+        attachments_queryset.first.return_value = attachment
+
+        attachments = MagicMock()
+        attachments.filter.return_value = attachments_queryset
+
+        testrun = MagicMock()
+        testrun.attachments = attachments
+
+        queryset = MagicMock()
+        queryset.exists.return_value = True
+        queryset.first.return_value = testrun
+
+        objects = MagicMock()
+        objects.filter.return_value = queryset
+
+        mock_testrun.objects = objects
+        mock_settings.BASE_URL = "http://squad.com"
+
+        url = "http://squad.com/api/testruns/1/attachments?filename=tradefed.tar.xz"
+        results = self.plugin._download_results(url)
+        self.assertEqual(self.plugin.tradefed_results_url, url)
+        results.tradefed_zipfile.contents.seek(0)
+        self.assertEqual(b"1", results.tradefed_zipfile.contents.read())
 
     def test_assign_test_log(self):
         test_mock = Mock()
@@ -1014,3 +1106,18 @@ class TradefedLogsPluginTest(unittest.TestCase):
                   at java.util.concurrent.FutureTask.run(FutureTask.java:264)
                   at java.lang.Thread.run(Thread.java:1012)\n"""
         })
+
+    def test_extract_tarball_filename_from_url(self):
+
+        # Make sure it returns None if no valid filenames are found
+        self.assertIsNone(self.plugin._extract_tarball_filename_from_url("not-really-valid"))
+        self.assertIsNone(self.plugin._extract_tarball_filename_from_url("https://nothing.com/here"))
+        self.assertIsNone(self.plugin._extract_tarball_filename_from_url("https://nothing.com/here?nor=there"))
+        self.assertIsNone(self.plugin._extract_tarball_filename_from_url("https://nothing.com/invalid-extension.zip"))
+        self.assertIsNone(self.plugin._extract_tarball_filename_from_url("https://nothing.com/invalid-compression.tar.gz"))
+
+        filename = self.plugin._extract_tarball_filename_from_url("http://some.url/tradefed.tar.xz")
+        self.assertEqual("tradefed.tar.xz", filename)
+
+        filename = self.plugin._extract_tarball_filename_from_url("http://some.url/?param1=val1&filename=tradefed.tar.xz")
+        self.assertEqual("tradefed.tar.xz", filename)
