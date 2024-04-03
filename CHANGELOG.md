@@ -1,3 +1,8 @@
+# 1.33
+
+This release refactors the tradefed plugin a bit. It also add a condition
+where the tradefed file might come from squad, avoiding an extra download.
+
 # 1.32
 
 This release adds a missing update to job status when jobs
