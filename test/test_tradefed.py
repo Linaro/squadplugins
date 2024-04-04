@@ -46,6 +46,35 @@ RESULTS = """
   url: /results/testcase/9991
 """
 
+RESULTS_BAD = """
+- id: '9991'
+  job: '999'
+  level: ''
+  log_end_line: '4353'
+  log_start_line: '4353'
+  logged: '2018-11-07 11:11:01.341667+00:00'
+  measurement: None
+  metadata: {case: BOOTTIME_LOGCAT_ALL_COLLECT, definition: 2_bar, result: pass}
+  name: BOOTTIME_LOGCAT_ALL_COLLECT
+  result: pass
+  suite: 2_bar
+  unit: ''
+  url: /results/testcase/9991
+- id: '9992'
+  job: '999'
+  level: ''
+  log_end_line: '4359'
+  log_start_line: '4359'
+  logged: '2018-11-07 11:11:01.341667+00:00'
+  measurement: None
+  metadata: {case: test-attachment, definition: 2_bar, result: fail}
+  name: test-attachment
+  result: pass
+  suite: 2_bar
+  unit: ''
+  url: /results/testcase/9991
+"""
+
 RESULTS_INVALID = """
 - id: '9991'
   job: '999': 123
@@ -717,6 +746,25 @@ class TradefedLogsPluginTest(unittest.TestCase):
         )
         testjob_mock.backend.get_implementation().proxy.results.get_testsuite_results_yaml.return_value = (
             "[]"
+        )
+        job_id_mock = PropertyMock(return_value=999)
+        type(testjob_mock).job_id = job_id_mock
+        result = self.plugin._get_from_artifactorial(testjob_mock, suite_name)
+        job_id_mock.assert_called_with()
+        testjob_mock.backend.get_implementation().proxy.results.get_testjob_suites_list_yaml.assert_called_once_with(999)
+        testjob_mock.backend.get_implementation().proxy.results.get_testsuite_results_yaml.assert_called_with(999, '2_bar', 500, 0)
+        self.assertIsNone(result)
+
+    @patch("tradefed.Tradefed._download_results")
+    def test_get_from_artifactorial_no_url(self, download_results_mock):
+        suite_name = "2_bar"
+        download_results_mock.return_value = ResultFiles()
+        testjob_mock = Mock()
+        testjob_mock.backend.get_implementation().proxy.results.get_testjob_suites_list_yaml.return_value = (
+            SUITES
+        )
+        testjob_mock.backend.get_implementation().proxy.results.get_testsuite_results_yaml.return_value = (
+            RESULTS_BAD
         )
         job_id_mock = PropertyMock(return_value=999)
         type(testjob_mock).job_id = job_id_mock

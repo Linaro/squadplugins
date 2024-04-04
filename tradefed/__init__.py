@@ -447,7 +447,9 @@ class Tradefed(BasePlugin):
                         if len(yaml_results) > 0:
                             for result in yaml_results:
                                 if result['name'] == 'test-attachment':
-                                    return self._download_results(result['metadata']['reference'])
+                                    if result['result'] == 'pass' and 'reference' in result['metadata']:
+                                        return self._download_results(result['metadata']['reference'])
+                                    return None
                             offset = offset + limit
                             logger.debug("requesting results for %s with offset of %s"
                                          % (suite['name'], offset))
