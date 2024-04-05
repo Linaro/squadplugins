@@ -1,3 +1,8 @@
+# 1.33.1
+
+This release fixes a corner case from past release when a job
+has a failed test-attachment case.
+
 # 1.33
 
 This release refactors the tradefed plugin a bit. It also add a condition
