@@ -561,7 +561,7 @@ class Tradefed(BasePlugin):
 
         tradefed_files = self._extract_tradefed_from_job_definition(testjob)
         if len(tradefed_files) != 1:
-            logger.error(f"Job {testjob.id} has {len(tradefed_files)} tradefed files in the definition, it should have 1")
+            logger.info(f"Job {testjob.id} has {len(tradefed_files)} tradefed files in the definition, it should have 1, aborting")
             update_testjob_status.delay(testjob.id, self.extra_args.get("job_status"))
             logger.info("Finishing CTS/VTS plugin for test run: %s" % testjob)
             return
