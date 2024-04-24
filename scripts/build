@@ -7,7 +7,7 @@ v="${tag:1}"
 
 # Build pip package
 rm -rf build/ dist/ *.egg-info/
-python3 setup.py sdist bdist_wheel
+python3 -m build
 
 # test
 tar=$(mktemp tar.XXXXXXXXX)
@@ -19,5 +19,5 @@ cleanup() {
 
 git ls-tree -r --name-only HEAD | grep -v '\.tar$' | sort > "$git"
 
-tar taf dist/squad-linaro-plugins-${v}.tar.gz | cut -d / -f 2- | grep -v '\(/$\|^$\|PKG-INFO\|egg-info\)' | sort > "$tar"
+tar taf dist/squad_linaro_plugins-${v}.tar.gz | cut -d / -f 2- | grep -v '\(/$\|^$\|PKG-INFO\|egg-info\)' | sort > "$tar"
 diff -u "$tar" "$git"
