@@ -550,34 +550,91 @@ class Tradefed(BasePlugin):
 
         return tradefed_files
 
+    def _get_tradefed_url_from_tuxsuite(self, testjob):
+        """
+        Android jobs coming from Tuxsuite should have a test names "test-attachment"
+        and it should have a reference attached to it, same as regular LAVA.
+
+        The test looks like this:
+
+        {
+            'test-attachment': {
+                'reference': 'https://qa-reports.linaro.org/api/testruns/23505462/attachments/?filename=tradefed-output-20240417085054.tar.xz',
+                'result': 'pass'
+            }
+        }
+
+        The tricky part is that SQUAD only reads "result" and disregard "reference".
+        So Tradefed plugin needs to request results once more from Tuxsuite just to
+        get the "reference" value.
+        """
+
+        session = get_session()
+        results_url = f"{testjob.url}/results"
+        response = session.get(results_url)
+        if response.status_code != 200:
+            logger.error(f"Failed to retrieve results from Tuxsuite: {response.content}")
+            return None
+
+        results = response.json()
+        error = results.get("error", None)
+        if error is not None:
+            logger.error(f"Failed to retrieve results from Tuxsuite: {error}")
+            return None
+
+        for suite, suite_tests in results.items():
+            test = suite_tests.get("test-attachment")
+            if test:
+
+                reference = test.get("reference")
+                if reference is None:
+                    logger.error("Failed to retrieve results from Tuxsuite: there is no 'reference' in 'test-attachment'")
+                    return None
+
+                return reference
+
+        logger.info("No 'test-attachment' found for this Tuxsuite job")
+        return None
+
     def postprocess_testjob(self, testjob):
         self.extra_args["job_id"] = testjob.id
 
         logger.info("Starting CTS/VTS plugin for test job: %s" % testjob)
-        if not testjob.backend.implementation_type == 'lava':
-            logger.error(f"Test job {testjob.id} doesn't come from LAVA")
+        backend_type = testjob.backend.implementation_type
+        if backend_type not in ['lava', 'tuxsuite']:
+            logger.error(f"Test job {testjob.id} does not come from LAVA nor Tuxsuite")
             update_testjob_status.delay(testjob.id, self.extra_args.get("job_status"))
             return
 
-        tradefed_files = self._extract_tradefed_from_job_definition(testjob)
-        if len(tradefed_files) != 1:
-            logger.info(f"Job {testjob.id} has {len(tradefed_files)} tradefed files in the definition, it should have 1, aborting")
-            update_testjob_status.delay(testjob.id, self.extra_args.get("job_status"))
-            logger.info("Finishing CTS/VTS plugin for test run: %s" % testjob)
-            return
-
-        tradefed_name, results_format = tradefed_files[0]
-
-        results_extracted = False
         results = None
-        try:
-            results = self._get_from_artifactorial(testjob, tradefed_name)
-        except xmlrpc.client.ProtocolError as err:
-            error_cleaned = 'Failed to process CTS/VTS tests: %s - %s' % (err.errcode, testjob.backend.get_implementation().url_remove_token(str(err.errmsg)))
-            logger.error(error_cleaned)
+        if backend_type == 'lava':
+            tradefed_files = self._extract_tradefed_from_job_definition(testjob)
+            if len(tradefed_files) != 1:
+                logger.error(f"Job {testjob.id} has {len(tradefed_files)} tradefed files in the definition, it should have 1")
+                update_testjob_status.delay(testjob.id, self.extra_args.get("job_status"))
+                logger.info("Finishing CTS/VTS plugin for test run: %s" % testjob)
+                return
 
-            testjob.failure += error_cleaned
-            testjob.save()
+            try:
+                tradefed_name, results_format = tradefed_files[0]
+                results = self._get_from_artifactorial(testjob, tradefed_name)
+            except xmlrpc.client.ProtocolError as err:
+                error_cleaned = 'Failed to process CTS/VTS tests: %s - %s' % (err.errcode, testjob.backend.get_implementation().url_remove_token(str(err.errmsg)))
+                logger.error(error_cleaned)
+
+                testjob.failure += error_cleaned
+                testjob.save()
+        else:
+            # Get it from Tuxsuite
+            url = self._get_tradefed_url_from_tuxsuite(testjob)
+            if url is None:
+                logger.info("Aborting CTS/VTS, no tradefed URL found within Tuxsuite results")
+                update_testjob_status.delay(testjob.id, self.extra_args.get("job_status"))
+                return
+
+            results = self._download_results(url)
+            tradefed_name = "vts-lkft"
+            results_format = "aggregated"
 
         if results is None:
             logger.info("Aborting CTS/VTS, no tradefed file found")
@@ -588,6 +645,7 @@ class Tradefed(BasePlugin):
         testjob.testrun.metadata["tradefed_results_url_%s" % testjob.job_id] = self.tradefed_results_url
         testjob.testrun.save()
 
+        results_extracted = False
         if results.test_results is not None:
             if testjob.target.get_setting("PLUGINS_TRADEFED_EXTRACT_AGGREGATED", False) and results_format == "aggregated":
                 self._extract_cts_results(results.test_results.contents, testjob.testrun, tradefed_name)

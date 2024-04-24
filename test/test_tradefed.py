@@ -493,7 +493,7 @@ class TradefedLogsPluginTest(unittest.TestCase):
     @patch("tradefed.Tradefed._get_from_artifactorial")
     @patch("tradefed.update_testjob_status.delay")
     @patch("tradefed.Tradefed.tradefed_results_url", new_callable=PropertyMock)
-    def test_postprocess_testjob(
+    def test_postprocess_testjob_lava(
         self,
         results_url_mock,
         update_testjob_status_mock,
@@ -527,6 +527,48 @@ class TradefedLogsPluginTest(unittest.TestCase):
         assign_test_log_mock.assert_not_called()
         create_testrun_attachment_mock.assert_not_called()
         update_testjob_status_mock.assert_called()
+
+    @patch("tradefed.Tradefed._get_tradefed_url_from_tuxsuite")
+    @patch("tradefed.Tradefed._download_results")
+    @patch("tradefed.Tradefed._extract_cts_results")
+    @patch("tradefed.Tradefed._create_testrun_attachment")
+    @patch("tradefed.Tradefed._assign_test_log")
+    @patch("tradefed.update_testjob_status.delay")
+    @patch("tradefed.Tradefed.tradefed_results_url", new_callable=PropertyMock)
+    def test_postprocess_testjob_tuxsuite(
+        self,
+        results_url_mock,
+        update_testjob_status_mock,
+        assign_test_log_mock,
+        create_testrun_attachment_mock,
+        extract_cts_results_mock,
+        download_results_mock,
+        get_tradefed_url_from_tuxsuite_mock,
+    ):
+        results_url_mock.return_value = "http://foo.com"
+        download_results_mock.return_value = ResultFiles()
+        testjob_mock = MagicMock()
+        id_mock = PropertyMock(return_value="999111")
+        type(testjob_mock).pk = id_mock
+        job_id_mock = PropertyMock(return_value="1234")
+        type(testjob_mock).job_id = job_id_mock
+        testjob_mock.backend = MagicMock()
+        implementation_type_mock = PropertyMock(return_value="tuxsuite")
+        type(testjob_mock.backend).implementation_type = implementation_type_mock
+        testjob_target = MagicMock()
+        project_settings_mock = PropertyMock(return_value='{}')
+        type(testjob_target).project_settings = project_settings_mock
+        type(testjob_mock).target = testjob_target
+        self.plugin.postprocess_testjob(testjob_mock)
+        implementation_type_mock.assert_called_once_with()
+        results_url_mock.assert_called_with()
+        testjob_mock.testrun.metadata.__setitem__.assert_called_with('tradefed_results_url_1234', 'http://foo.com')
+        testjob_mock.testrun.save.assert_called_with()
+        assign_test_log_mock.assert_not_called()
+        create_testrun_attachment_mock.assert_not_called()
+        update_testjob_status_mock.assert_called()
+        get_tradefed_url_from_tuxsuite_mock.assert_called()
+        download_results_mock.assert_called()
 
     @patch("tradefed.Tradefed._create_testrun_attachment")
     @patch("tradefed.Tradefed._assign_test_log")
@@ -1169,3 +1211,87 @@ class TradefedLogsPluginTest(unittest.TestCase):
 
         filename = self.plugin._extract_tarball_filename_from_url("http://some.url/?param1=val1&filename=tradefed.tar.xz")
         self.assertEqual("tradefed.tar.xz", filename)
+
+    def test_get_tradefed_url_from_tuxsuite_bad_request(self):
+        job_url = "http://tuxsuite.com/job#123"
+
+        testjob = MagicMock()
+        testjob.url = job_url
+
+        with requests_mock.Mocker() as fake_request:
+            fake_request.get(
+                f"{job_url}/results",
+                status_code=404,
+            )
+
+            url = self.plugin._get_tradefed_url_from_tuxsuite(testjob)
+            self.assertIsNone(url)
+
+    def test_get_tradefed_url_from_tuxsuite_errored_json(self):
+        job_url = "http://tuxsuite.com/job#123"
+
+        testjob = MagicMock()
+        testjob.url = job_url
+
+        with requests_mock.Mocker() as fake_request:
+            fake_request.get(
+                f"{job_url}/results",
+                status_code=200,
+                content=b'{"error": "some error"}',
+                headers={"Content-Type": "application/json"},
+            )
+
+            url = self.plugin._get_tradefed_url_from_tuxsuite(testjob)
+            self.assertIsNone(url)
+
+    def test_get_tradefed_url_from_tuxsuite_no_test_attachment(self):
+        job_url = "http://tuxsuite.com/job#123"
+
+        testjob = MagicMock()
+        testjob.url = job_url
+
+        with requests_mock.Mocker() as fake_request:
+            fake_request.get(
+                f"{job_url}/results",
+                status_code=200,
+                content=b'{"suite": {"test1": {"result": "pass"}}}',
+                headers={"Content-Type": "application/json"},
+            )
+
+            url = self.plugin._get_tradefed_url_from_tuxsuite(testjob)
+            self.assertIsNone(url)
+
+    def test_get_tradefed_url_from_tuxsuite_no_reference(self):
+        job_url = "http://tuxsuite.com/job#123"
+
+        testjob = MagicMock()
+        testjob.url = job_url
+
+        with requests_mock.Mocker() as fake_request:
+            fake_request.get(
+                f"{job_url}/results",
+                status_code=200,
+                content=b'{"suite": {"test-attachment": {"result": "pass"}}}',
+                headers={"Content-Type": "application/json"},
+            )
+
+            url = self.plugin._get_tradefed_url_from_tuxsuite(testjob)
+            self.assertIsNone(url)
+
+    def test_get_tradefed_url_from_tuxsuite(self):
+        job_url = "http://tuxsuite.com/job#123"
+        tradefed_url = "http://tradefed.url"
+
+        testjob = MagicMock()
+        testjob.url = job_url
+
+        with requests_mock.Mocker() as fake_request:
+            fake_request.get(
+                f"{job_url}/results",
+                status_code=200,
+                content=b'{"suite": {"test-attachment": {"result": "pass", "reference": "http://tradefed.url"}}}',
+                headers={"Content-Type": "application/json"},
+            )
+
+            url = self.plugin._get_tradefed_url_from_tuxsuite(testjob)
+            self.assertEqual(tradefed_url, url)
