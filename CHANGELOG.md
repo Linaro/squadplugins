@@ -1,3 +1,8 @@
+# 1.34
+
+This release adds support for fetching android jobs from Tuxsuite
+while still parsing the tradefed file
+
 # 1.33.1
 
 This release fixes a corner case from past release when a job
