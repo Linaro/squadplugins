@@ -412,14 +412,14 @@ class Tradefed(BasePlugin):
                 return None
 
             if not suites:
-                logger.error("Something went wrong when calling results.get_testjob_suites_list_yaml from LAVA for job {testjob.id}")
+                logger.error(f"Something went wrong when calling results.get_testjob_suites_list_yaml from LAVA for job {testjob.id}")
                 return None
         else:
             suites_url = urljoin(testjob.backend.get_implementation().api_url_base, f"jobs/{testjob.job_id}/suites/?name__contains={suite_name}")
             try:
                 suites = self.__get_paginated_objects(suites_url, lava_implementation)
             except PaginatedObjectException:
-                logger.error("Unable to retrieve suites for job: {testjob.job_id}")
+                logger.error(f"Unable to retrieve suites for job: {testjob.job_id}")
                 return None
 
         for suite in suites:
@@ -440,7 +440,7 @@ class Tradefed(BasePlugin):
                         return None
 
                     if not yaml_results:
-                        logger.error("Something went wrong with results.get_testsuite_results_yaml from LAVA for job {testjob.id}")
+                        logger.error(f"Something went wrong with results.get_testsuite_results_yaml from LAVA for job {testjob.id}")
                         return None
 
                     while True:
@@ -602,7 +602,7 @@ class Tradefed(BasePlugin):
         logger.info("Starting CTS/VTS plugin for test job: %s" % testjob)
         backend_type = testjob.backend.implementation_type
         if backend_type not in ['lava', 'tuxsuite']:
-            logger.error(f"Test job {testjob.id} does not come from LAVA nor Tuxsuite")
+            logger.warning(f"Test job {testjob.id} does not come from LAVA nor Tuxsuite")
             update_testjob_status.delay(testjob.id, self.extra_args.get("job_status"))
             return
 
@@ -610,9 +610,8 @@ class Tradefed(BasePlugin):
         if backend_type == 'lava':
             tradefed_files = self._extract_tradefed_from_job_definition(testjob)
             if len(tradefed_files) != 1:
-                logger.error(f"Job {testjob.id} has {len(tradefed_files)} tradefed files in the definition, it should have 1")
+                logger.info(f"Job {testjob.id} has {len(tradefed_files)} tradefed files in the definition, skipping CTS/VTS")
                 update_testjob_status.delay(testjob.id, self.extra_args.get("job_status"))
-                logger.info("Finishing CTS/VTS plugin for test run: %s" % testjob)
                 return
 
             try:
