@@ -1,3 +1,8 @@
+# 1.34.2
+
+This 1.34.2 release silence some error logs and fix format-string
+logs that were missing the initial "f" character.
+
 # 1.34.1
 
 This release adds support for fetching android jobs from Tuxsuite
