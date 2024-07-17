@@ -15,7 +15,16 @@ logger = logging.getLogger()
 
 @celery.task(queue='ci_fetch')
 def update_build_status(results_list, testrun_id, job_id, job_status):
-    testrun = TestRun.objects.get(pk=testrun_id)
+
+    """
+        There could be a scenario where the test job, and its test run as consequence, gets deleted
+        by the user. Since this function is invoked upon task from the queue, by the time it actually
+        gets invoked, the test run might not exist anymore.
+    """
+    try:
+        testrun = TestRun.objects.get(pk=testrun_id)
+    except TestRun.DoesNotExist:
+        return
 
     # Compute stats all at once
     Status.objects.filter(test_run=testrun).all().delete()

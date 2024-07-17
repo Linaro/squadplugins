@@ -6,6 +6,7 @@ import unittest
 from io import StringIO, BytesIO
 from unittest.mock import PropertyMock, MagicMock, Mock, patch
 from tradefed import Tradefed, ResultFiles, ExtractedResult
+from tradefed.tasks import update_build_status
 from collections import defaultdict
 
 
@@ -1295,3 +1296,19 @@ class TradefedLogsPluginTest(unittest.TestCase):
 
             url = self.plugin._get_tradefed_url_from_tuxsuite(testjob)
             self.assertEqual(tradefed_url, url)
+
+    @patch("tradefed.update_testjob_status.delay")
+    @patch("tradefed.tasks.TestRun")
+    def test_update_build_status_testrun_not_found(self, mock_testrun, mock_update_testjob_status):
+        class does_not_exist_mock(Exception):
+            pass
+
+        mock_testrun.DoesNotExist = does_not_exist_mock
+
+        objects = MagicMock()
+        objects.get.side_effect = does_not_exist_mock()
+
+        mock_testrun.objects = objects
+
+        update_build_status(None, None, None, None)
+        mock_update_testjob_status.assert_not_called()
