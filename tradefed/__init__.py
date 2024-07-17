@@ -618,10 +618,7 @@ class Tradefed(BasePlugin):
                 tradefed_name, results_format = tradefed_files[0]
                 results = self._get_from_artifactorial(testjob, tradefed_name)
             except xmlrpc.client.ProtocolError as err:
-                error_cleaned = 'Failed to process CTS/VTS tests: %s - %s' % (err.errcode, testjob.backend.get_implementation().url_remove_token(str(err.errmsg)))
-                logger.error(error_cleaned)
-
-                testjob.failure += error_cleaned
+                testjob.failure = 'Failed to process CTS/VTS tests: %s - %s' % (err.errcode, testjob.backend.get_implementation().url_remove_token(str(err.errmsg)))
                 testjob.save()
         else:
             # Get it from Tuxsuite
