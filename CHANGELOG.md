@@ -1,3 +1,8 @@
+# 1.34.3
+
+This 1.34.3 release silence a few more error logs and adds a check if certain
+testrun exist before doing any work on tradefed.
+
 # 1.34.2
 
 This 1.34.2 release silence some error logs and fix format-string
